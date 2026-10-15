@@ -10,12 +10,19 @@ const pool = new Pool({
   port: process.env.DB_PORT ? parseInt(process.env.DB_PORT) : 5432,
 });
 
-// Test de la connexion au démarrage
 pool
-  .connect()
-  .then((client) => {
-    console.log("✅ Connecté à la base de données PostgreSQL avec succès");
-    client.release();
+  .query(`
+    SELECT
+      current_database() AS base,
+      inet_server_port() AS port,
+      current_schema() AS schema,
+      to_regclass('public.signalement') AS table_signalement
+  `)
+  .then((res) => {
+    console.log("✅ Connecté à PostgreSQL :", res.rows[0]);
+    if (!res.rows[0].table_signalement) {
+      console.warn("⚠️ La table 'signalement' n'existe PAS dans cette base.");
+    }
   })
   .catch((err) => {
     console.error("❌ Erreur de connexion à PostgreSQL :", err.message);
