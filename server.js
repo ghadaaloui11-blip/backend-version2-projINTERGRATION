@@ -18,5 +18,7 @@ app.use("/api/reports", reportsRoutes);
 // Routes intégrées du Membre 4
 app.use('/api/campagnes', require('./campagnes/campagnes.routes'));
 app.use('/api/signalement', require('./reports/consultation.routes'));
+// US02 & US03 : Dépôt documents légaux + validation associations
+app.use('/api/associations', require('./associations/associations.routes'));
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Serveur prêt sur le port ${PORT}`));
