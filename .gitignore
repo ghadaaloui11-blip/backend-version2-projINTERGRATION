@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Environnement (secrets)
+.env
+
+# Fichiers televerses : documents legaux prives + photos publiques
+uploads/
+uploads-public/
+
+# Divers
+*.log
+.DS_Store
