@@ -123,12 +123,30 @@ test("parcours citoyen : inscription 201 -> connexion 200 (nettoye ensuite)", as
   assert.equal(supprime.rows.length, 1);
 });
 
-test("connexion : mauvais identifiants -> 400", async () => {
+test("connexion : mauvais identifiants -> 401", async () => {
   const { status, json } = await api("POST", "/api/auth/connexion", {
     body: { email: "inconnu@test.tn", motDePasse: "mauvais" },
   });
-  assert.equal(status, 400);
+  assert.equal(status, 401);
   assert.ok(json.erreur);
+});
+
+test("connexion : les espaces autour du mot de passe sont ignores", async () => {
+  const email = `trim_${Date.now()}@test.tn`;
+
+  const inscription = await api("POST", "/api/auth/inscription", {
+    body: { nom: "Test", email, motDePasse: " Secret123! ", role: "citoyen" },
+  });
+  assert.equal(inscription.status, 201);
+
+  const connexion = await api("POST", "/api/auth/connexion", {
+    body: { email, motDePasse: "Secret123!" },
+  });
+  assert.equal(connexion.status, 200);
+  assert.ok(connexion.json.token);
+
+  const supprime = await pool.query("DELETE FROM utilisateur WHERE email = $1 RETURNING id", [email]);
+  assert.equal(supprime.rows.length, 1);
 });
 
 test("don : montant invalide -> 400", async () => {

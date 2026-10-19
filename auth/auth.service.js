@@ -22,7 +22,9 @@ exports.inscrireUtilisateur = async (data) => {
     matriculeFiscal,
   } = data || {};
 
-  if (!email || !motDePasse || !role) {
+  const motDePasseNettoye = String(motDePasse ?? "").trim();
+
+  if (!email || !motDePasseNettoye || !role) {
     throw echec(400, "Champs obligatoires manquants (email, motDePasse, role).");
   }
   if (!nom) {
@@ -52,7 +54,7 @@ exports.inscrireUtilisateur = async (data) => {
       throw echec(400, "Cet email est déjà utilisé.");
     }
 
-    const hashedPassword = await bcrypt.hash(motDePasse, 10);
+    const hashedPassword = await bcrypt.hash(motDePasseNettoye, 10);
 
     const newUser = await client.query(
       `INSERT INTO utilisateur (nom, prenom, email, telephone, mot_de_passe_hache, role)
@@ -92,7 +94,9 @@ exports.inscrireUtilisateur = async (data) => {
 };
 
 exports.connecterUtilisateur = async (email, motDePasse) => {
-  if (!email || !motDePasse) {
+  const motDePasseNettoye = String(motDePasse ?? "").trim();
+
+  if (!email || !motDePasseNettoye) {
     throw echec(400, "Email et mot de passe obligatoires.");
   }
 
@@ -101,13 +105,13 @@ exports.connecterUtilisateur = async (email, motDePasse) => {
     [normaliserEmail(email)]
   );
   if (userQuery.rows.length === 0) {
-    throw echec(400, "Email ou mot de passe incorrect.");
+    throw echec(401, "Email ou mot de passe incorrect.");
   }
 
   const user = userQuery.rows[0];
-  const isValid = await bcrypt.compare(motDePasse, user.mot_de_passe_hache);
+  const isValid = await bcrypt.compare(motDePasseNettoye, user.mot_de_passe_hache);
   if (!isValid) {
-    throw echec(400, "Email ou mot de passe incorrect.");
+    throw echec(401, "Email ou mot de passe incorrect.");
   }
 
   const token = jwt.sign(

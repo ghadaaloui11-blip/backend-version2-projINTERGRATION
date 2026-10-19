@@ -68,6 +68,27 @@ const limiteAuth = rateLimit({
 
 app.use(limiteGlobale);
 app.use(express.json({ limit: "100kb" }));
+
+// Journal des requetes limite au developpement : rend les 400/401 visibles dans
+// le terminal. Le mot de passe n'est jamais journalise, seul l'email pour /api/auth.
+if (process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "test") {
+  app.use((req, res, next) => {
+    const debut = Date.now();
+    const email =
+      req.originalUrl.startsWith("/api/auth") && req.body && req.body.email
+        ? ` email=${req.body.email}`
+        : "";
+    res.on("finish", () => {
+      console.log(
+        `[${req.method}] ${req.originalUrl} ${res.statusCode} ${
+          Date.now() - debut
+        }ms${email}`
+      );
+    });
+    next();
+  });
+}
+
 app.use("/uploads/photos", express.static(uploadsPublicDir));
 
 // Routes intégrées du Membre 2
