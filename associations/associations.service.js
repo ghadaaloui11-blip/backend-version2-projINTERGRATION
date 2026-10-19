@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { echec } = require('../utils/http');
 
 // US02 : Déposer un document légal pour l'association connectée
 exports.ajouterDocument = async (associationId, typeDocument, filePath, nomOriginal) => {
@@ -22,6 +23,17 @@ exports.getMesDocuments = async (associationId) => {
     [associationId]
   );
   return rows;
+};
+
+// US02 : Un document + son proprietaire (pour le contrôle d'accès au telechargement)
+exports.getDocumentParId = async (docId) => {
+  const { rows } = await pool.query(
+    `SELECT id, association_id, type_document, chemin_fichier, nom_original
+     FROM document_association
+     WHERE id = $1`,
+    [docId]
+  );
+  return rows[0];
 };
 
 // US02 : Supprimer un document (seulement si appartient à l'association)
@@ -64,9 +76,10 @@ exports.listerAssociationsPourAdmin = async (statut) => {
 };
 
 // US03 : Obtenir les documents d'une association (admin)
+// Pas de chemin_fichier expose : le front telecharge via /api/documents/:id/file.
 exports.getDocumentsAssociation = async (associationId) => {
   const { rows } = await pool.query(
-    `SELECT id, type_document, nom_original, chemin_fichier,
+    `SELECT id, type_document, nom_original,
             to_char(date_depot, 'YYYY-MM-DD HH24:MI') AS date_depot
      FROM document_association
      WHERE association_id = $1
@@ -79,7 +92,7 @@ exports.getDocumentsAssociation = async (associationId) => {
 // US03 : Valider ou refuser une association (admin)
 exports.validerAssociation = async (associationId, statut, commentaire) => {
   if (!['approuve', 'refuse'].includes(statut)) {
-    throw { status: 400, message: 'Statut invalide. Valeurs acceptées : approuve, refuse' };
+    throw echec(400, 'Statut invalide. Valeurs acceptées : approuve, refuse');
   }
 
   const { rows } = await pool.query(
@@ -93,7 +106,7 @@ exports.validerAssociation = async (associationId, statut, commentaire) => {
   );
 
   if (!rows[0]) {
-    throw { status: 404, message: 'Association introuvable' };
+    throw echec(404, 'Association introuvable');
   }
   return rows[0];
 };

@@ -1,4 +1,24 @@
 const pool = require('../config/db'); // adapte si db.js exporte { pool }
+const { echec } = require('../utils/http');
+
+// Statut effectif : une campagne dont la date de fin est passee est "terminee",
+// sans avoir a ecrire en base (pas de tache planifiee).
+const STATUT_SQL = `CASE WHEN c.date_fin < CURRENT_DATE THEN 'terminee' ELSE c.statut END`;
+
+// to_char => bech el dates ma yetbaddlouch b fuseau horaire (2026-10-31T23:00Z)
+// ::float8 => pg renvoie les NUMERIC en string ; on veut des nombres cote front.
+const COLS = `c.id, c.titre, c.description,
+  c.objectif_montant::float8 AS objectif_montant,
+  c.montant_collecte::float8 AS montant_collecte,
+  to_char(c.date_debut, 'YYYY-MM-DD') AS date_debut,
+  to_char(c.date_fin, 'YYYY-MM-DD') AS date_fin,
+  ${STATUT_SQL} AS statut, c.association_id,
+  COALESCE(a.nom_association, u.nom) AS association_nom`;
+
+// Jointure commune : nom de l'association proprietaire de la campagne
+const JOINS = `FROM campagnes c
+  LEFT JOIN association a ON a.id = c.association_id
+  LEFT JOIN utilisateur u ON u.id = c.association_id`;
 
 exports.create = async (data, associationId) => {
   const { titre, description, objectif_montant, date_debut, date_fin } = data;
@@ -7,22 +27,16 @@ exports.create = async (data, associationId) => {
     `INSERT INTO campagnes
        (titre, description, objectif_montant, date_debut, date_fin, association_id)
      VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING *`,
+     RETURNING id, titre, description,
+               objectif_montant::float8 AS objectif_montant,
+               montant_collecte::float8 AS montant_collecte,
+               to_char(date_debut, 'YYYY-MM-DD') AS date_debut,
+               to_char(date_fin, 'YYYY-MM-DD') AS date_fin,
+               statut, association_id`,
     [titre, description, objectif_montant, date_debut, date_fin, associationId]
   );
   return rows[0];
 };
-// to_char => bech el dates ma yetbaddlouch b fuseau horaire (2026-10-31T23:00Z)
-const COLS = `c.id, c.titre, c.description, c.objectif_montant, c.montant_collecte,
-  to_char(c.date_debut, 'YYYY-MM-DD') AS date_debut,
-  to_char(c.date_fin, 'YYYY-MM-DD') AS date_fin,
-  c.statut, c.association_id,
-  COALESCE(a.nom_association, u.nom) AS association_nom`;
-
-// Jointure commune : nom de l'association proprietaire de la campagne
-const JOINS = `FROM campagnes c
-  LEFT JOIN association a ON a.id = c.association_id
-  LEFT JOIN utilisateur u ON u.id = c.association_id`;
 
 // US10 : liste des campagnes (par défaut: actives seulement, ?statut=all pour tout)
 exports.findAll = async ({ statut = 'active', search } = {}) => {
@@ -31,7 +45,7 @@ exports.findAll = async ({ statut = 'active', search } = {}) => {
 
   if (statut !== 'all') {
     params.push(statut);
-    where.push(`c.statut = $${params.length}`);
+    where.push(`${STATUT_SQL} = $${params.length}`);
   }
   if (search) {
     params.push(`%${search}%`);
@@ -75,6 +89,7 @@ exports.listAssociations = async () => {
   );
   return rows;
 };
+
 // US12 : avancement d'une campagne
 exports.getAvancement = async (id) => {
   const camp = await pool.query(`SELECT ${COLS} ${JOINS} WHERE c.id = $1`, [id]);
@@ -98,7 +113,8 @@ exports.getAvancement = async (id) => {
   }
 
   const fonds = await pool.query(
-    `SELECT id, libelle, montant, to_char(date_utilisation, 'YYYY-MM-DD') AS date_utilisation
+    `SELECT id, libelle, montant::float8 AS montant,
+            to_char(date_utilisation, 'YYYY-MM-DD') AS date_utilisation
      FROM utilisation_fonds WHERE campagne_id = $1 ORDER BY id DESC`,
     [id]
   );
@@ -123,14 +139,53 @@ exports.getAvancement = async (id) => {
   };
 };
 
-// US12 : ajouter une utilisation de fonds
+// US12 : ajouter une utilisation de fonds.
+// Le controle du solde est fait DANS la transaction et la ligne campagne est
+// verrouillee (FOR UPDATE) : deux requetes concurrentes ne peuvent plus
+// depasser le solde disponible.
 exports.addUtilisation = async (campagneId, libelle, montant) => {
-  const { rows } = await pool.query(
-    `INSERT INTO utilisation_fonds (campagne_id, libelle, montant)
-     VALUES ($1, $2, $3) RETURNING *`,
-    [campagneId, libelle, montant]
-  );
-  return rows[0];
+  const montantNum = Number(montant);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const camp = await client.query(
+      'SELECT montant_collecte::float8 AS montant_collecte FROM campagnes WHERE id = $1 FOR UPDATE',
+      [campagneId]
+    );
+    if (!camp.rows[0]) {
+      throw echec(404, 'Campagne introuvable');
+    }
+
+    const total = await client.query(
+      'SELECT COALESCE(SUM(montant), 0)::float8 AS total FROM utilisation_fonds WHERE campagne_id = $1',
+      [campagneId]
+    );
+    const solde = Number(camp.rows[0].montant_collecte) - Number(total.rows[0].total);
+
+    if (montantNum > solde) {
+      throw echec(
+        400,
+        `Montant supérieur au solde disponible (${solde.toFixed(2)}).`
+      );
+    }
+
+    const { rows } = await client.query(
+      `INSERT INTO utilisation_fonds (campagne_id, libelle, montant)
+       VALUES ($1, $2, $3)
+       RETURNING id, campagne_id, libelle, montant::float8 AS montant,
+                 to_char(date_utilisation, 'YYYY-MM-DD') AS date_utilisation`,
+      [campagneId, libelle, montantNum]
+    );
+
+    await client.query('COMMIT');
+    return rows[0];
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 };
 
 // US11 : enregistrer un don et mettre a jour le montant collecte (transaction)
@@ -151,7 +206,8 @@ exports.createDon = async (campagneId, { montant, estAnonyme, nom, message }) =>
       `UPDATE dons
          SET reference = 'DON-' || to_char(NOW(), 'YYYY') || '-' || lpad(id::text, 4, '0')
        WHERE id = $1
-       RETURNING id, reference, campagne_id, montant, est_anonyme, nom, message, date, statut`,
+       RETURNING id, reference, campagne_id, montant::float8 AS montant,
+                 est_anonyme, nom, message, date, statut`,
       [inserted.rows[0].id]
     );
 

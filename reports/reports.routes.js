@@ -2,13 +2,13 @@ const express = require("express");
 const router = express.Router();
 const reportsController = require("./reports.controller");
 const authMiddleware = require("../middlewares/auth.middleware");
-// Meme filtre que les documents legaux : PDF/JPG/PNG, 10 Mo max.
-const uploadMiddleware = require("../middlewares/upload.documents.middleware");
+// Photo de signalement : stockee dans uploads-public/ et servie sur /uploads/photos.
+const { uploadPhoto } = require("../middlewares/upload.middleware");
 
 router.post(
   "/",
   authMiddleware,
-  uploadMiddleware.single("photo"),
+  uploadPhoto.single("photo"),
   reportsController.creer
 );
 

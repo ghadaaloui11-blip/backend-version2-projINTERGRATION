@@ -1,4 +1,5 @@
 const reportsService = require("./reports.service");
+const { repondreErreur } = require("../utils/http");
 
 exports.creer = async (req, res) => {
   try {
@@ -11,10 +12,6 @@ exports.creer = async (req, res) => {
       .status(201)
       .json({ message: "Signalement créé avec succès !", signalement });
   } catch (err) {
-    res
-      .status(err.status || 500)
-      .json({
-        erreur: err.message || "Erreur lors de la création du signalement.",
-      });
+    repondreErreur(res, err, "Erreur lors de la création du signalement.");
   }
 };

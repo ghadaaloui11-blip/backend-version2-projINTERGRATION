@@ -1,14 +1,15 @@
 const pool = require("../config/db");
+const { echec } = require("../utils/http");
 
 exports.creerSignalement = async (data, file, userId) => {
-  const { description, latitude, longitude, est_anonyme } = data;
+  const { description, latitude, longitude, est_anonyme } = data || {};
 
   if (!description) {
-    throw { status: 400, message: "La description est obligatoire." };
+    throw echec(400, "La description est obligatoire.");
   }
 
-  // Chemin relatif servi par /uploads (le fichier est deja stocke dans <backend>/uploads)
-  const photoPath = file ? "uploads/" + file.filename : null;
+  // URL publique : /uploads/photos/<fichier> (dossier uploads-public/)
+  const photoPath = file ? "uploads/photos/" + file.filename : null;
   const estAnonymeBool = est_anonyme === "true" || est_anonyme === true;
   const citoyenId = estAnonymeBool ? null : userId;
   const latValue = latitude ? parseFloat(latitude) : null;

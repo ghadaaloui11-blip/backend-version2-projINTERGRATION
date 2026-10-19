@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const authMiddleware = require('../middlewares/auth.middleware');
 const checkRole = require('../middlewares/role.middleware');
-const upload = require('../middlewares/upload.documents.middleware');
+const upload = require('../middlewares/upload.middleware');
 const ctrl = require('./associations.controller');
 
 // ─── US02 : Routes pour l'association connectée ───────────────────────────
@@ -9,7 +9,7 @@ const ctrl = require('./associations.controller');
 // Statut de validation de mon association
 router.get('/mon-statut', authMiddleware, checkRole('association'), ctrl.getMonStatut);
 
-// Déposer un document légal
+// Déposer un document légal (dossier prive : uploads/)
 router.post(
   '/documents',
   authMiddleware,

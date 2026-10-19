@@ -1,4 +1,5 @@
 const authService = require("./auth.service");
+const { repondreErreur } = require("../utils/http");
 
 exports.inscription = async (req, res) => {
   try {
@@ -7,20 +8,16 @@ exports.inscription = async (req, res) => {
       .status(201)
       .json({ message: "Inscription réussie !", utilisateur: user });
   } catch (err) {
-    res
-      .status(err.status || 500)
-      .json({ erreur: err.message || "Erreur serveur." });
+    repondreErreur(res, err, "Erreur lors de l'inscription.");
   }
 };
 
 exports.connexion = async (req, res) => {
   try {
-    const { email, motDePasse } = req.body;
+    const { email, motDePasse } = req.body || {};
     const result = await authService.connecterUtilisateur(email, motDePasse);
     res.status(200).json({ message: "Connexion réussie", ...result });
   } catch (err) {
-    res
-      .status(err.status || 500)
-      .json({ erreur: err.message || "Erreur serveur." });
+    repondreErreur(res, err, "Erreur lors de la connexion.");
   }
 };
