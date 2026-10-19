@@ -7,7 +7,8 @@ exports.creerSignalement = async (data, file, userId) => {
     throw { status: 400, message: "La description est obligatoire." };
   }
 
-  const photoPath = file ? file.path : null;
+  // Chemin relatif servi par /uploads (le fichier est deja stocke dans <backend>/uploads)
+  const photoPath = file ? "uploads/" + file.filename : null;
   const estAnonymeBool = est_anonyme === "true" || est_anonyme === true;
   const citoyenId = estAnonymeBool ? null : userId;
   const latValue = latitude ? parseFloat(latitude) : null;

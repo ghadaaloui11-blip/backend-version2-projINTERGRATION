@@ -14,4 +14,6 @@ router.post('/', authMiddleware, checkRole('association'), controller.createCamp
 // US12
 router.get('/:id/avancement', controller.getAvancement);
 router.post('/:id/utilisation', authMiddleware, checkRole('association'), controller.addUtilisation);
+// US11 : don financier (public, don possiblement anonyme)
+router.post('/:id/don', controller.createDon);
 module.exports = router;

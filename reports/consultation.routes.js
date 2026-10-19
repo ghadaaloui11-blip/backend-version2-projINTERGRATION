@@ -20,9 +20,9 @@ router.get('/', authMiddleware, checkRole('association', 'admin'), async (req, r
       params
     );
 
-    // Respect de l'anonymat du citoyen
+    // Respect de l'anonymat du citoyen (la colonne est est_anonyme)
     const result = rows.map((s) => {
-      if (s.anonyme) {
+      if (s.est_anonyme) {
         const { citoyen_id, user_id, ...rest } = s;
         return rest;
       }
@@ -45,7 +45,7 @@ router.get('/:id', authMiddleware, checkRole('association', 'admin'), async (req
     if (!rows[0]) return res.status(404).json({ message: 'Signalement introuvable' });
 
     const s = rows[0];
-    if (s.anonyme) {
+    if (s.est_anonyme) {
       delete s.citoyen_id;
       delete s.user_id;
     }

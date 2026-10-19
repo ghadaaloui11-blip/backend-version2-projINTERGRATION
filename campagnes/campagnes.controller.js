@@ -105,3 +105,35 @@ exports.addUtilisation = async (req, res) => {
     res.status(500).json({ message: 'Erreur serveur' });
   }
 };
+
+// US11 : don financier sur une campagne (public : le don peut etre anonyme)
+exports.createDon = async (req, res) => {
+  try {
+    const { montant, est_anonyme, nom, message } = req.body || {};
+    const montantNum = Number(montant);
+
+    if (!Number.isFinite(montantNum) || montantNum <= 0) {
+      return res.status(400).json({ erreur: 'Le montant du don doit être supérieur à 0.' });
+    }
+
+    const campagne = await campagnesService.findById(req.params.id);
+    if (!campagne) return res.status(404).json({ erreur: 'Campagne introuvable.' });
+
+    const anonyme = est_anonyme === true || est_anonyme === 'true';
+    const nomDonateur = anonyme ? null : (nom ? String(nom).trim() || null : null);
+    const messageDon = message ? String(message).trim() || null : null;
+
+    const don = await campagnesService.createDon(req.params.id, {
+      montant: montantNum,
+      estAnonyme: anonyme,
+      nom: nomDonateur,
+      message: messageDon,
+    });
+
+    // Le front attend directement l'objet du don (comme le faisait le mock)
+    res.status(201).json(don);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erreur: 'Erreur serveur' });
+  }
+};

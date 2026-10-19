@@ -25,7 +25,7 @@ exports.deposerDocument = async (req, res) => {
     const doc = await service.ajouterDocument(
       req.user.id,
       type_document,
-      req.file.path,
+      'uploads/' + req.file.filename,
       req.file.originalname
     );
 
