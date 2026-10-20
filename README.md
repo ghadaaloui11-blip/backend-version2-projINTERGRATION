@@ -59,7 +59,8 @@ npm test      # node:test + fetch, sans dépendance externe
 
 Les tests démarrent le serveur sur un port éphémère et exercent l'API réelle
 (401 / 403 / 404 JSON, refus du rôle admin à l'inscription, rollback en cas
-d'échec d'inscription, parcours citoyen, validations du don, accès documents).
+d'échec d'inscription, parcours citoyen, validations du don, accès documents,
+règles de don par rôle, création de campagne soumise à validation admin).
 
 ## Structure
 
@@ -89,9 +90,9 @@ uploads-public/            # photos de signalement PUBLIQUES (non versionnées)
 | GET | `/api/signalement`, `/api/signalement/:id` | association, admin |
 | GET | `/api/campagnes`, `/:id`, `/:id/avancement`, `/associations` | public |
 | GET | `/api/campagnes/mes-campagnes` | association |
-| POST | `/api/campagnes` | association |
-| POST | `/api/campagnes/:id/don` | public |
-| POST | `/api/campagnes/:id/utilisation` | association (propriétaire) |
+| POST | `/api/campagnes` | association **approuvée** |
+| POST | `/api/campagnes/:id/don` | public (don anonyme) ; citoyen ; **refusé** aux admins/associations connectés |
+| POST | `/api/campagnes/:id/utilisation` | association propriétaire **approuvée** |
 | GET/POST/DELETE | `/api/associations/documents` | association |
 | GET | `/api/associations/mon-statut` | association |
 | GET | `/api/associations`, `/:id/documents` | admin |
@@ -110,5 +111,12 @@ uploads-public/            # photos de signalement PUBLIQUES (non versionnées)
   pour que le front reçoive des `number` et non des chaînes (`"1000.00"`).
 - **Statuts de campagne** : une campagne dont la `date_fin` est dépassée est
   renvoyée comme `terminee` (calcul à la lecture, sans écriture en base).
+- **Règles de don** : seuls les citoyens connectés (et le public, pour un don
+  anonyme) peuvent donner. Un token `admin` ou `association` sur
+  `POST /:id/don` reçoit un `403` (`authMiddleware.optionnel` +
+  `checkRole.interdire`), sans casser le don anonyme sans login.
+- **Création de campagne** : réservée aux associations dont
+  `statut_validation = 'approuve'`. Une association `pending`/`refuse` reçoit un
+  `403` sur `POST /api/campagnes` et `POST /:id/utilisation`.
 - Les réponses d'erreur sont toujours `{ "erreur": "..." }`, y compris pour les
   routes inconnues (404 JSON).
