@@ -15,5 +15,12 @@ router.post('/', authMiddleware, checkRole('association'), controller.createCamp
 router.get('/:id/avancement', controller.getAvancement);
 router.post('/:id/utilisation', authMiddleware, checkRole('association'), controller.addUtilisation);
 // US11 : don financier (public, don possiblement anonyme)
-router.post('/:id/don', controller.createDon);
+// Un don anonyme reste possible sans login ; un admin ou une association
+// connecte(e) est refuse (seuls les citoyens donnent).
+router.post(
+  '/:id/don',
+  authMiddleware.optionnel,
+  checkRole.interdire('admin', 'association'),
+  controller.createDon
+);
 module.exports = router;

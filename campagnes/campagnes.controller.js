@@ -1,8 +1,30 @@
 const campagnesService = require('./campagnes.service');
 const { repondreErreur } = require('../utils/http');
 
+const associationsService = require('../associations/associations.service');
+
+// Une campagne (ou une utilisation) n'est ouverte qu'a une association
+// validee par l'admin (US03).
+const exigerAssociationApprouvee = async (req, res, erreur) => {
+  const asso = await associationsService.getMonStatut(req.user.id);
+  if (!asso || asso.statut_validation !== 'approuve') {
+    res.status(403).json({ erreur });
+    return false;
+  }
+  return true;
+};
+
 exports.createCampagne = async (req, res) => {
   try {
+    if (
+      !(await exigerAssociationApprouvee(
+        req,
+        res,
+        "Votre association doit être validée par un administrateur avant de créer une campagne."
+      ))
+    )
+      return;
+
     const { titre, description, objectif_montant, date_debut, date_fin } = req.body || {};
 
     if (!titre || !description || !objectif_montant || !date_debut || !date_fin) {
@@ -89,6 +111,15 @@ exports.addUtilisation = async (req, res) => {
     if (campagne.association_id !== req.user.id) {
       return res.status(403).json({ erreur: "Cette campagne n'est pas la vôtre" });
     }
+
+    if (
+      !(await exigerAssociationApprouvee(
+        req,
+        res,
+        "Votre association doit être validée par un administrateur pour déclarer une utilisation."
+      ))
+    )
+      return;
 
     // Le controle du solde est fait dans la transaction (service).
     const utilisation = await campagnesService.addUtilisation(req.params.id, libelle, montant);
