@@ -33,6 +33,29 @@ node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 
 ## Base de données
 
+### PostgreSQL avec Docker (recommandé en dev)
+
+```bash
+docker run --name solidarite-postgres \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=<mot_de_passe_local> \
+  -e POSTGRES_DB=solidarite_db \
+  -p 5432:5432 -d postgres:16
+```
+
+Au quotidien :
+
+```bash
+docker start solidarite-postgres   # après un redémarrage de la machine
+docker stop solidarite-postgres    # pour libérer le port 5432
+```
+
+Le mot de passe doit être identique à `DB_PASSWORD` dans `.env`. Les données
+sont conservées tant que le conteneur existe (`docker rm -f solidarite-postgres`
+les efface).
+
+### Migrations et compte admin
+
 ```bash
 npm run migrate       # applique migrations/*.sql (idempotent)
 npm run create-admin  # crée le compte admin de migrations/create-admin.js
@@ -60,7 +83,9 @@ npm test      # node:test + fetch, sans dépendance externe
 Les tests démarrent le serveur sur un port éphémère et exercent l'API réelle
 (401 / 403 / 404 JSON, refus du rôle admin à l'inscription, rollback en cas
 d'échec d'inscription, parcours citoyen, validations du don, accès documents,
-règles de don par rôle, création de campagne soumise à validation admin).
+règles de don par rôle, création de campagne soumise à validation admin,
+visibilité publique des signalements, prise en charge exclusive par une
+association (409), transitions de statut, réouverture et historique).
 
 ## Structure
 
@@ -87,7 +112,12 @@ uploads-public/            # photos de signalement PUBLIQUES (non versionnées)
 | POST | `/api/auth/inscription` | public (citoyen / association uniquement) |
 | POST | `/api/auth/connexion` | public |
 | POST | `/api/reports` | authentifié (multipart `photo`) |
-| GET | `/api/signalement`, `/api/signalement/:id` | association, admin |
+| GET | `/api/signalement/public`, `/api/signalement/public/:id` | **public, sans authentification** |
+| GET | `/api/signalement/mes` | authentifié (uniquement ses propres signalements) |
+| GET | `/api/signalement/mes-prises-en-charge` | association, admin |
+| POST | `/api/signalement/:id/prendre-en-charge` | association **approuvée** (409 si déjà prise en charge) |
+| PATCH | `/api/signalement/:id/statut` | association **responsable** (`en_cours` ↔ `resolu`) |
+| GET | `/api/signalement`, `/api/signalement/:id` | association, admin (sans identité du citoyen) |
 | GET | `/api/campagnes`, `/:id`, `/:id/avancement`, `/associations` | public |
 | GET | `/api/campagnes/mes-campagnes` | association |
 | POST | `/api/campagnes` | association **approuvée** |
@@ -118,5 +148,19 @@ uploads-public/            # photos de signalement PUBLIQUES (non versionnées)
 - **Création de campagne** : réservée aux associations dont
   `statut_validation = 'approuve'`. Une association `pending`/`refuse` reçoit un
   `403` sur `POST /api/campagnes` et `POST /:id/utilisation`.
+- **Signalements (US06/US32/US33)** : trois statuts seulement — `recu` (défaut,
+  aucune association), `en_cours` (prise en charge explicite par une association
+  validée) et `resolu`. Aucune affectation automatique : une association choisit
+  le signalement via `POST /:id/prendre-en-charge`. L'anti-course est garanti par
+  un `SELECT ... FOR UPDATE` + `UPDATE` conditionnel dans une transaction
+  (la seconde association reçoit `409`). Seule l'association responsable peut
+  faire évoluer le statut (`en_cours → resolu`, ou `resolu → en_cours` pour
+  rouvrir) ; toute autre association reçoit `403`. Chaque transition est
+  journalisée dans `signalement_statut_historique` et exposée dans
+  `historique: [{ statut, date, nom_association }]`. Les signalements
+  `en_cours`/`resolus` restent visibles publiquement.
+- **Confidentialité** : la projection publique ne sélectionne jamais
+  `citoyen_id` (anonyme ou non) ; les endpoints US07 association/admin ne
+  l'exposent pas davantage.
 - Les réponses d'erreur sont toujours `{ "erreur": "..." }`, y compris pour les
   routes inconnues (404 JSON).

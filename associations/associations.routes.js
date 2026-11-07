@@ -15,6 +15,7 @@ router.post(
   authMiddleware,
   checkRole('association'),
   upload.single('document'),
+  upload.verifierContenu,
   ctrl.deposerDocument
 );
 

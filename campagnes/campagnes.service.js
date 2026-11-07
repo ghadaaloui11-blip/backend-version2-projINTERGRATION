@@ -76,12 +76,12 @@ exports.findByAssociation = async (associationId) => {
   return rows;
 };
 
-// US10 : liste des associations (sans mot de passe)
-// nom = nom de l'association (affichage), nom_contact = nom du responsable
+// US10 : liste des associations (projection publique)
+// Aucune donnee de contact privee (email, telephone, nom du responsable) :
+// l'endpoint est public. nom = nom de l'association (affichage).
 exports.listAssociations = async () => {
   const { rows } = await pool.query(
-    `SELECT u.id, a.nom_association AS nom, a.nom_association,
-            u.nom AS nom_contact, u.email, u.telephone
+    `SELECT u.id, a.nom_association AS nom, a.nom_association
      FROM utilisateur u
      LEFT JOIN association a ON a.id = u.id
      WHERE u.role = 'association'
@@ -143,6 +143,8 @@ exports.getAvancement = async (id) => {
 // Le controle du solde est fait DANS la transaction et la ligne campagne est
 // verrouillee (FOR UPDATE) : deux requetes concurrentes ne peuvent plus
 // depasser le solde disponible.
+// Une campagne terminee (date de fin passee ou statut non actif) est fermee :
+// aucune utilisation ne peut plus y etre declaree.
 exports.addUtilisation = async (campagneId, libelle, montant) => {
   const montantNum = Number(montant);
   const client = await pool.connect();
@@ -150,11 +152,16 @@ exports.addUtilisation = async (campagneId, libelle, montant) => {
     await client.query('BEGIN');
 
     const camp = await client.query(
-      'SELECT montant_collecte::float8 AS montant_collecte FROM campagnes WHERE id = $1 FOR UPDATE',
+      `SELECT montant_collecte::float8 AS montant_collecte,
+              (date_fin < CURRENT_DATE OR statut <> 'active') AS fermee
+       FROM campagnes WHERE id = $1 FOR UPDATE`,
       [campagneId]
     );
     if (!camp.rows[0]) {
       throw echec(404, 'Campagne introuvable');
+    }
+    if (camp.rows[0].fermee) {
+      throw echec(400, 'Cette campagne est terminée : aucune utilisation ne peut y être déclarée.');
     }
 
     const total = await client.query(
@@ -189,16 +196,31 @@ exports.addUtilisation = async (campagneId, libelle, montant) => {
 };
 
 // US11 : enregistrer un don et mettre a jour le montant collecte (transaction)
+// Refuse les dons sur une campagne terminee (date de fin passee ou statut non
+// actif). La ligne campagne est verrouillee : le controle reste valable face a
+// une mise a jour concurrente du statut/des dates.
 exports.createDon = async (campagneId, { montant, estAnonyme, nom, message }) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
+    const camp = await client.query(
+      `SELECT id, (date_fin < CURRENT_DATE OR statut <> 'active') AS fermee
+       FROM campagnes WHERE id = $1 FOR UPDATE`,
+      [campagneId]
+    );
+    if (!camp.rows[0]) {
+      throw echec(404, 'Campagne introuvable.');
+    }
+    if (camp.rows[0].fermee) {
+      throw echec(400, 'Cette campagne est terminée : les dons ne sont plus acceptés.');
+    }
+
     const inserted = await client.query(
       `INSERT INTO dons (campagne_id, montant, est_anonyme, nom, message, statut)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id`,
-      [campagneId, montant, estAnonyme, nom, message, 'Don enregistré (paiement simulé)']
+      [campagneId, montant, estAnonyme, nom, message, 'enregistre']
     );
 
     // Reference deterministe : DON-<annee>-<id sur 4 chiffres>

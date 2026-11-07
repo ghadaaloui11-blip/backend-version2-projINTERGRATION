@@ -43,7 +43,54 @@ const creerUpload = (destination) =>
 const uploadDocument = creerUpload(DOCUMENTS_DIR);
 const uploadPhoto = creerUpload(PHOTOS_DIR);
 
+// Signatures binaires (magic bytes) des formats autorises. L'extension seule
+// ne prouve rien : un executable renomme en .jpg passait le fileFilter.
+const SIGNATURES = {
+  '.pdf': [[0x25, 0x50, 0x44, 0x46]], // %PDF
+  '.jpg': [[0xff, 0xd8, 0xff]],
+  '.jpeg': [[0xff, 0xd8, 0xff]],
+  '.png': [[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]],
+};
+
+// A placer APRES multer (le fichier doit exister sur disque). Supprime le
+// fichier et renvoie 400 si son contenu ne correspond pas a son extension.
+const verifierContenu = (req, res, next) => {
+  if (!req.file) return next();
+
+  const ext = path.extname(req.file.originalname).toLowerCase();
+  const signatures = SIGNATURES[ext] || [];
+  let conforme = false;
+
+  try {
+    const fd = fs.openSync(req.file.path, 'r');
+    try {
+      const entete = Buffer.alloc(8);
+      const lus = fs.readSync(fd, entete, 0, entete.length, 0);
+      conforme = signatures.some(
+        (signature) =>
+          lus >= signature.length &&
+          signature.every((octet, index) => entete[index] === octet)
+      );
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    conforme = false;
+  }
+
+  if (!conforme) {
+    fs.rmSync(req.file.path, { force: true });
+    return res.status(400).json({
+      erreur:
+        'Contenu de fichier invalide : le fichier doit être un PDF, un JPG ou un PNG.',
+    });
+  }
+
+  next();
+};
+
 module.exports = uploadDocument; // compat historique : require(...).single('document')
 module.exports.uploadDocument = uploadDocument;
 module.exports.uploadPhoto = uploadPhoto;
+module.exports.verifierContenu = verifierContenu;
 module.exports.DOCUMENTS_DIR = DOCUMENTS_DIR;

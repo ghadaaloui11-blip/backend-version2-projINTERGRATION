@@ -23,18 +23,35 @@ exports.inscrireUtilisateur = async (data) => {
   } = data || {};
 
   const motDePasseNettoye = String(motDePasse ?? "").trim();
+  const nomNettoye = String(nom ?? "").trim();
+  const prenomNettoye = String(prenom ?? "").trim();
+  const telephoneNettoye = String(telephone ?? "").trim();
 
   if (!email || !motDePasseNettoye || !role) {
     throw echec(400, "Champs obligatoires manquants (email, motDePasse, role).");
-  }
-  if (!nom) {
-    throw echec(400, "Le nom est obligatoire.");
   }
   if (!ROLES_PUBLICS.includes(role)) {
     throw echec(
       400,
       "Rôle invalide. Valeurs acceptées : citoyen, association."
     );
+  }
+  // Validation serveur alignee sur le formulaire : le front ne doit pas etre
+  // la seule barriere (un appel direct a l'API pourrait creer un compte vide).
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim())) {
+    throw echec(400, "Le format de l'email est invalide.");
+  }
+  if (nomNettoye.length < 2) {
+    throw echec(400, "Le nom est obligatoire (2 caractères minimum).");
+  }
+  if (prenomNettoye.length < 2) {
+    throw echec(400, "Le prénom est obligatoire (2 caractères minimum).");
+  }
+  if (!/^[0-9+\s()-]{8,}$/.test(telephoneNettoye)) {
+    throw echec(400, "Le téléphone est obligatoire (8 caractères minimum).");
+  }
+  if (motDePasseNettoye.length < 6) {
+    throw echec(400, "Le mot de passe doit contenir au moins 6 caractères.");
   }
   if (role === "association" && !nomAssociation) {
     throw echec(400, "Le nom de l'association est obligatoire.");
@@ -60,7 +77,7 @@ exports.inscrireUtilisateur = async (data) => {
       `INSERT INTO utilisateur (nom, prenom, email, telephone, mot_de_passe_hache, role)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, nom, email, role`,
-      [nom, prenom || null, emailNormalise, telephone || null, hashedPassword, role]
+      [nomNettoye, prenomNettoye, emailNormalise, telephoneNettoye, hashedPassword, role]
     );
     const userId = newUser.rows[0].id;
 
@@ -75,7 +92,7 @@ exports.inscrireUtilisateur = async (data) => {
     } else {
       await client.query("INSERT INTO citoyen (id, prenom) VALUES ($1, $2)", [
         userId,
-        prenom || null,
+        prenomNettoye,
       ]);
     }
 

@@ -39,11 +39,6 @@ authMiddleware.optionnel = async (req, res, next) => {
   }
 };
 
-// Reserve au telechargement de fichiers : un lien <a href> ne peut pas porter
-// d'entete Authorization, le token est donc aussi accepte en query string.
-// A n'utiliser que sur des routes GET de fichiers.
-authMiddleware.depuisQuery = authentifier(
-  (req) => depuisEntete(req) || req.query.token || null
-);
-
+// Le telechargement de fichiers se fait desormais en blob via HttpClient :
+// l'entete Authorization suffit, le token n'est plus accepte en query string.
 module.exports = authMiddleware;

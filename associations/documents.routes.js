@@ -1,9 +1,11 @@
 // Telechargement des documents legaux : reserve au proprietaire ou a un admin.
+// Authentification par entete uniquement : le front telecharge en blob via
+// HttpClient (l'intercepteur ajoute le Bearer). Le token en query string est
+// refuse pour ne pas fuiter dans les logs et l'historique du navigateur.
 const router = require('express').Router();
 const authMiddleware = require('../middlewares/auth.middleware');
 const ctrl = require('./associations.controller');
 
-// Le token peut venir de l'entete ou de ?token= (lien direct depuis le front).
-router.get('/:id/file', authMiddleware.depuisQuery, ctrl.telechargerDocument);
+router.get('/:id/file', authMiddleware, ctrl.telechargerDocument);
 
 module.exports = router;
