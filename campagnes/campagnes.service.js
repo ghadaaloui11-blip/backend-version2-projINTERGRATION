@@ -39,7 +39,8 @@ exports.create = async (data, associationId) => {
 };
 
 // US10 : liste des campagnes (par défaut: actives seulement, ?statut=all pour tout)
-exports.findAll = async ({ statut = 'active', search } = {}) => {
+// Filtres avancés : ?statut=..., ?search=..., ?date_debut=..., ?date_fin=..., ?association_id=...
+exports.findAll = async ({ statut = 'active', search, date_debut, date_fin, association_id } = {}) => {
   const params = [];
   const where = [];
 
@@ -47,9 +48,25 @@ exports.findAll = async ({ statut = 'active', search } = {}) => {
     params.push(statut);
     where.push(`${STATUT_SQL} = $${params.length}`);
   }
+
   if (search) {
     params.push(`%${search}%`);
     where.push(`(c.titre ILIKE $${params.length} OR c.description ILIKE $${params.length})`);
+  }
+
+  if (date_debut) {
+    params.push(date_debut);
+    where.push(`c.date_debut >= $${params.length}`);
+  }
+
+  if (date_fin) {
+    params.push(date_fin);
+    where.push(`c.date_fin <= $${params.length}`);
+  }
+
+  if (association_id) {
+    params.push(association_id);
+    where.push(`c.association_id = $${params.length}`);
   }
 
   const { rows } = await pool.query(
@@ -247,5 +264,36 @@ exports.createDon = async (campagneId, { montant, estAnonyme, nom, message }) =>
     throw err;
   } finally {
     client.release();
+  }
+};
+
+exports.update = async (id, data) => {
+  const { titre, description, objectif_montant, date_debut, date_fin } = data;
+
+  const { rows } = await pool.query(
+    `UPDATE campagnes 
+     SET titre = $1, description = $2, objectif_montant = $3, date_debut = $4, date_fin = $5
+     WHERE id = $6 
+     RETURNING id, titre, description,
+               objectif_montant::float8 AS objectif_montant,
+               montant_collecte::float8 AS montant_collecte,
+               to_char(date_debut, 'YYYY-MM-DD') AS date_debut,
+               to_char(date_fin, 'YYYY-MM-DD') AS date_fin,
+               statut, association_id`,
+    [titre, description, objectif_montant, date_debut, date_fin, id]
+  );
+  
+  if (!rows[0]) {
+    throw echec(404, 'Campagne introuvable');
+  }
+  
+  return rows[0];
+};
+
+exports.delete = async (id) => {
+  const result = await pool.query('DELETE FROM campagnes WHERE id = $1', [id]);
+  
+  if (result.rowCount === 0) {
+    throw echec(404, 'Campagne introuvable');
   }
 };

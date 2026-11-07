@@ -17,4 +17,20 @@ router.post(
   reportsController.creer
 );
 
+// Obtenir un signalement par ID
+router.get("/:id", authMiddleware, reportsController.getById);
+
+// Mettre à jour un signalement (seul le créateur peut le modifier)
+router.patch(
+  "/:id",
+  authMiddleware,
+  checkRole("citoyen"),
+  uploadPhoto.single("photo"),
+  verifierContenu,
+  reportsController.update
+);
+
+// Supprimer un signalement (seul le créateur peut le supprimer)
+router.delete("/:id", authMiddleware, checkRole("citoyen"), reportsController.delete);
+
 module.exports = router;

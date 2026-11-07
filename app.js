@@ -101,6 +101,8 @@ app.use("/api/signalement", require("./reports/consultation.routes"));
 app.use("/api/associations", require("./associations/associations.routes"));
 // Documents legaux : telechargement authentifie (association proprietaire ou admin)
 app.use("/api/documents", documentsRoutes);
+// Gestion des profils utilisateurs
+app.use("/api/users", require("./users/users.routes"));
 
 // 404 JSON (avant le middleware d'erreurs) : les routes inconnues ne renvoient
 // plus la page HTML d'Express.

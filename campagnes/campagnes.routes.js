@@ -11,6 +11,11 @@ router.get('/mes-campagnes', authMiddleware, checkRole('association'), controlle
 router.get('/:id', controller.getOne);
 
 router.post('/', authMiddleware, checkRole('association'), controller.createCampagne);
+// Mettre à jour une campagne
+router.patch('/:id', authMiddleware, checkRole('association'), controller.updateCampagne);
+// Supprimer une campagne
+router.delete('/:id', authMiddleware, checkRole('association'), controller.deleteCampagne);
+
 // US12
 router.get('/:id/avancement', controller.getAvancement);
 router.post('/:id/utilisation', authMiddleware, checkRole('association'), controller.addUtilisation);

@@ -20,17 +20,40 @@ const COLS = `id, description, photo,
   longitude::float8 AS longitude,
   est_anonyme, statut, created_at`;
 
-// Liste (filtre optionnel ?statut=...) — reservee association/admin (US07)
+// Liste (filtre optionnel ?statut=..., ?search=..., ?date_debut=..., ?date_fin=...)
+// — reservee association/admin (US07)
 router.get('/', authMiddleware, checkRole('association', 'admin'), async (req, res) => {
   try {
     const params = [];
     let where = '';
+    const conditions = [];
+
     if (req.query.statut) {
       params.push(req.query.statut);
-      where = 'WHERE statut = $1';
+      conditions.push('statut = $' + params.length);
     }
+
+    if (req.query.search) {
+      params.push(`%${req.query.search}%`);
+      conditions.push('(description ILIKE $' + params.length + ')');
+    }
+
+    if (req.query.date_debut) {
+      params.push(req.query.date_debut);
+      conditions.push('created_at >= $' + params.length);
+    }
+
+    if (req.query.date_fin) {
+      params.push(req.query.date_fin);
+      conditions.push('created_at <= $' + params.length);
+    }
+
+    if (conditions.length > 0) {
+      where = 'WHERE ' + conditions.join(' AND ');
+    }
+
     const { rows } = await pool.query(
-      `SELECT ${COLS} FROM ${TABLE} ${where} ORDER BY id DESC`,
+      `SELECT ${COLS} FROM ${TABLE} ${where} ORDER BY created_at DESC`,
       params
     );
     res.json(rows);
@@ -46,10 +69,15 @@ router.get('/', authMiddleware, checkRole('association', 'admin'), async (req, r
 // privee ; seule l'association responsable est identifiee.
 // ---------------------------------------------------------------------------
 
-// Liste publique (filtre optionnel ?statut=recu|en_cours|resolu)
+// Liste publique (filtre optionnel ?statut=recu|en_cours|resolu, ?search=...)
 router.get('/public', async (req, res) => {
   try {
-    const signalements = await priseEnChargeService.listerPublics(req.query.statut);
+    const signalements = await priseEnChargeService.listerPublics({
+      statut: req.query.statut,
+      search: req.query.search,
+      date_debut: req.query.date_debut,
+      date_fin: req.query.date_fin
+    });
     res.json(signalements);
   } catch (err) {
     repondreErreur(res, err, 'Erreur lors du chargement des signalements.');

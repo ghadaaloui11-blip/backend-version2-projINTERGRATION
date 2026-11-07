@@ -159,3 +159,67 @@ exports.createDon = async (req, res) => {
     repondreErreur(res, err, "Erreur lors de l'enregistrement du don.");
   }
 };
+
+// Mettre à jour une campagne (seul le propriétaire peut le faire)
+exports.updateCampagne = async (req, res) => {
+  try {
+    const campagne = await campagnesService.findById(req.params.id);
+    if (!campagne) return res.status(404).json({ erreur: 'Campagne introuvable' });
+
+    if (campagne.association_id !== req.user.id) {
+      return res.status(403).json({ erreur: "Cette campagne n'est pas la vôtre" });
+    }
+
+    if (
+      !(await exigerAssociationApprouvee(
+        req,
+        res,
+        "Votre association doit être validée par un administrateur pour modifier une campagne."
+      ))
+    )
+      return;
+
+    const { titre, description, objectif_montant, date_debut, date_fin } = req.body || {};
+
+    if (!titre || !description || !objectif_montant || !date_debut || !date_fin) {
+      return res.status(400).json({ erreur: 'Tous les champs sont obligatoires' });
+    }
+    if (Number(objectif_montant) <= 0) {
+      return res.status(400).json({ erreur: "L'objectif doit être supérieur à 0" });
+    }
+    if (new Date(date_fin) <= new Date(date_debut)) {
+      return res.status(400).json({ erreur: 'La date de fin doit être après la date de début' });
+    }
+
+    const campagneUpdate = await campagnesService.update(req.params.id, req.body);
+    res.json({ message: 'Campagne mise à jour avec succès', campagne: campagneUpdate });
+  } catch (err) {
+    repondreErreur(res, err, 'Erreur lors de la mise à jour de la campagne.');
+  }
+};
+
+// Supprimer une campagne (seul le propriétaire peut le faire)
+exports.deleteCampagne = async (req, res) => {
+  try {
+    const campagne = await campagnesService.findById(req.params.id);
+    if (!campagne) return res.status(404).json({ erreur: 'Campagne introuvable' });
+
+    if (campagne.association_id !== req.user.id) {
+      return res.status(403).json({ erreur: "Cette campagne n'est pas la vôtre" });
+    }
+
+    if (
+      !(await exigerAssociationApprouvee(
+        req,
+        res,
+        "Votre association doit être validée par un administrateur pour supprimer une campagne."
+      ))
+    )
+      return;
+
+    await campagnesService.delete(req.params.id);
+    res.json({ message: 'Campagne supprimée avec succès' });
+  } catch (err) {
+    repondreErreur(res, err, 'Erreur lors de la suppression de la campagne.');
+  }
+};

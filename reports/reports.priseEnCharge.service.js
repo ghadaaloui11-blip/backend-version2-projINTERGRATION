@@ -40,16 +40,35 @@ const HISTORIQUE_JOIN = `
   ) hist ON TRUE
 `;
 
-exports.listerPublics = async (statut) => {
+exports.listerPublics = async ({ statut, search, date_debut, date_fin } = {}) => {
   const params = [];
-  let where = "";
+  const conditions = [];
+
   if (statut) {
     if (!STATUTS.includes(statut)) {
       throw echec(400, "Statut invalide. Valeurs acceptées : recu, en_cours, resolu.");
     }
     params.push(statut);
-    where = "WHERE s.statut = $1";
+    conditions.push("s.statut = $" + params.length);
   }
+
+  if (search) {
+    params.push(`%${search}%`);
+    conditions.push("(s.description ILIKE $" + params.length + ")");
+  }
+
+  if (date_debut) {
+    params.push(date_debut);
+    conditions.push("s.created_at >= $" + params.length);
+  }
+
+  if (date_fin) {
+    params.push(date_fin);
+    conditions.push("s.created_at <= $" + params.length);
+  }
+
+  const where = conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
+
   const { rows } = await pool.query(
     `SELECT ${COLS_PUBLIC}
      FROM signalement s

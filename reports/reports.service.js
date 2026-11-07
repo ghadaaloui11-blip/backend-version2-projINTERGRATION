@@ -60,3 +60,53 @@ exports.creerSignalement = async (data, file, userId) => {
     client.release();
   }
 };
+
+exports.getSignalementById = async (id, userId) => {
+  const { rows } = await pool.query(
+    `SELECT id, description, photo,
+     latitude::float8 AS latitude,
+     longitude::float8 AS longitude,
+     est_anonyme, statut, created_at
+     FROM signalement 
+     WHERE id = $1`,
+    [id]
+  );
+  
+  if (!rows[0]) {
+    throw echec(404, "Signalement introuvable");
+  }
+  
+  return rows[0];
+};
+
+exports.updateSignalement = async (id, data, file, userId) => {
+  const { description, latitude, longitude, est_anonyme } = data || {};
+  
+  // Vérifier si le signalement existe et appartient à l'utilisateur
+  const existing = await exports.getSignalementById(id, userId);
+  
+  if (!description || !String(description).trim()) {
+    throw echec(400, "La description est obligatoire.");
+  }
+
+  const photoPath = file ? "uploads/photos/" + file.filename : existing.photo;
+  const estAnonymeBool = est_anonyme === "true" || est_anonyme === true;
+  const latValue = parserCoordonnee(latitude, -90, 90, "La latitude");
+  const lonValue = parserCoordonnee(longitude, -180, 180, "La longitude");
+
+  const result = await pool.query(
+    `UPDATE signalement 
+     SET description = $1, photo = $2, latitude = $3, longitude = $4, est_anonyme = $5
+     WHERE id = $6 RETURNING *`,
+    [description, photoPath, latValue, lonValue, estAnonymeBool, id]
+  );
+  
+  return result.rows[0];
+};
+
+exports.deleteSignalement = async (id, userId) => {
+  // Vérifier si le signalement existe
+  const existing = await exports.getSignalementById(id, userId);
+  
+  await pool.query("DELETE FROM signalement WHERE id = $1", [id]);
+};
