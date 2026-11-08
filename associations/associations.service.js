@@ -122,3 +122,23 @@ exports.getMonStatut = async (associationId) => {
   );
   return rows[0];
 };
+// Liste publique : seulement les associations approuvees, champs non sensibles
+exports.listerAssociationsPubliques = async (recherche) => {
+  const params = [];
+  let filtre = '';
+  if (recherche) {
+    params.push('%' + recherche.trim() + '%');
+    filtre = `AND (a.nom_association ILIKE $1 OR a.adresse ILIKE $1)`;
+  }
+
+  const { rows } = await pool.query(
+    `SELECT a.id, a.nom_association, a.adresse, u.telephone
+     FROM association a
+     JOIN utilisateur u ON u.id = a.id
+     WHERE a.statut_validation = 'approuve'
+     ${filtre}
+     ORDER BY a.nom_association ASC`,
+    params
+  );
+  return rows;
+};

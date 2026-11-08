@@ -80,8 +80,7 @@ if (process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "test") {
         : "";
     res.on("finish", () => {
       console.log(
-        `[${req.method}] ${req.originalUrl} ${res.statusCode} ${
-          Date.now() - debut
+        `[${req.method}] ${req.originalUrl} ${res.statusCode} ${Date.now() - debut
         }ms${email}`
       );
     });
@@ -105,9 +104,11 @@ app.use("/api/documents", documentsRoutes);
 app.use("/api/users", require("./users/users.routes"));
 // US16 à US35 : Événements et participation (Sprint 2 - Membre 2)
 app.use("/api/evenements", require("./events/events.routes"));
+// US28 : Demandes d'aide (Sprint 2 - Membre 4)
+app.use("/api/demandes-aide", require("./demandes/demandes.routes"));
+// US14 : Bénévoles (Sprint 2 - Membre 4)
+app.use("/api/benevoles", require("./benevoles/benevoles.routes"));
 
-// 404 JSON (avant le middleware d'erreurs) : les routes inconnues ne renvoient
-// plus la page HTML d'Express.
 app.use((req, res) => {
   res.status(404).json({ erreur: "Route introuvable." });
 });

@@ -1,7 +1,11 @@
 const pool = require("../config/db");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
+const { OAuth2Client } = require("google-auth-library");
 const { echec } = require("../utils/http");
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // US01 : seules l'inscription citoyen et association sont publiques.
 // Les comptes admin sont crees uniquement via migrations/create-admin.js.
@@ -152,4 +156,94 @@ exports.connecterUtilisateur = async (email, motDePasse) => {
       role: user.role,
     },
   };
+};
+
+// Connexion / inscription via Google (le front envoie l'idToken Google)
+exports.connecterAvecGoogle = async (idToken) => {
+  if (!idToken) {
+    throw echec(400, "Le token Google est obligatoire.");
+  }
+  if (!process.env.GOOGLE_CLIENT_ID) {
+    throw echec(500, "GOOGLE_CLIENT_ID n'est pas configuré sur le serveur.");
+  }
+
+  let payload;
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken: idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    payload = ticket.getPayload();
+  } catch (err) {
+    throw echec(401, "Token Google invalide.");
+  }
+
+  if (!payload || !payload.email || !payload.email_verified) {
+    throw echec(401, "Email Google non vérifié.");
+  }
+
+  const email = normaliserEmail(payload.email);
+  const prenom = String(payload.given_name || "").trim() || "Utilisateur";
+  const nom = String(payload.family_name || "").trim() || prenom;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    let user;
+    const existant = await client.query(
+      "SELECT id, nom, prenom, email, role FROM utilisateur WHERE lower(email) = $1",
+      [email]
+    );
+
+    if (existant.rows.length > 0) {
+      user = existant.rows[0];
+    } else {
+      // Compte Google = citoyen. Mot de passe aleatoire (jamais utilise).
+      const motDePasseAleatoire = crypto.randomBytes(32).toString("hex");
+      const hache = await bcrypt.hash(motDePasseAleatoire, 10);
+
+      const nouveau = await client.query(
+        `INSERT INTO utilisateur (nom, prenom, email, mot_de_passe_hache, role)
+         VALUES ($1, $2, $3, $4, 'citoyen')
+         RETURNING id, nom, prenom, email, role`,
+        [nom, prenom, email, hache]
+      );
+      user = nouveau.rows[0];
+
+      await client.query("INSERT INTO citoyen (id, prenom) VALUES ($1, $2)", [
+        user.id,
+        prenom,
+      ]);
+    }
+
+    await client.query("COMMIT");
+
+    const token = jwt.sign(
+      {
+        id: user.id,
+        role: user.role,
+        nom: user.nom,
+        prenom: user.prenom,
+        email: user.email,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+
+    return {
+      token,
+      utilisateur: {
+        id: user.id,
+        nom: user.nom,
+        email: user.email,
+        role: user.role,
+      },
+    };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 };

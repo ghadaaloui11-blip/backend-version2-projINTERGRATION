@@ -134,3 +134,12 @@ exports.validerAssociation = async (req, res) => {
     repondreErreur(res, err, "Erreur lors de la validation de l'association.");
   }
 };
+// GET /api/associations/liste  — liste publique des associations approuvees
+exports.listerAssociationsPubliques = async (req, res) => {
+  try {
+    const associations = await service.listerAssociationsPubliques(req.query.recherche);
+    res.json(associations);
+  } catch (err) {
+    repondreErreur(res, err, 'Erreur lors du chargement des associations.');
+  }
+};

@@ -4,6 +4,9 @@ const checkRole = require('../middlewares/role.middleware');
 const upload = require('../middlewares/upload.middleware');
 const ctrl = require('./associations.controller');
 
+// Liste publique des associations approuvees (?recherche=nom ou ville)
+router.get('/liste', ctrl.listerAssociationsPubliques);
+
 // ─── US02 : Routes pour l'association connectée ───────────────────────────
 
 // Statut de validation de mon association

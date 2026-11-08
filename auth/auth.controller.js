@@ -21,3 +21,12 @@ exports.connexion = async (req, res) => {
     repondreErreur(res, err, "Erreur lors de la connexion.");
   }
 };
+exports.google = async (req, res) => {
+  try {
+    const { idToken } = req.body || {};
+    const result = await authService.connecterAvecGoogle(idToken);
+    res.status(200).json({ message: "Connexion Google réussie", ...result });
+  } catch (err) {
+    repondreErreur(res, err, "Erreur lors de la connexion Google.");
+  }
+};
