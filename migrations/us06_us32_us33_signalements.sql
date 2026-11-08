@@ -11,6 +11,8 @@
 --    association_id == utilisateur.id de l'association (meme convention
 --    que campagnes.association_id). NULL = en attente d'une association.
 ALTER TABLE signalement
+  ADD COLUMN IF NOT EXISTS statut VARCHAR(20) NOT NULL DEFAULT 'recu',
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   ADD COLUMN IF NOT EXISTS association_id INTEGER REFERENCES association(id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS date_prise_en_charge TIMESTAMP,
   ADD COLUMN IF NOT EXISTS date_resolution TIMESTAMP;

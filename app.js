@@ -103,6 +103,8 @@ app.use("/api/associations", require("./associations/associations.routes"));
 app.use("/api/documents", documentsRoutes);
 // Gestion des profils utilisateurs
 app.use("/api/users", require("./users/users.routes"));
+// US16 à US35 : Événements et participation (Sprint 2 - Membre 2)
+app.use("/api/evenements", require("./events/events.routes"));
 
 // 404 JSON (avant le middleware d'erreurs) : les routes inconnues ne renvoient
 // plus la page HTML d'Express.

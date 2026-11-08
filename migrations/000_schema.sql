@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS utilisateur (
 );
 
 -- ------------------------------------------------------------
+ALTER TABLE utilisateur ADD COLUMN IF NOT EXISTS prenom VARCHAR(120);
+ALTER TABLE utilisateur ADD COLUMN IF NOT EXISTS telephone VARCHAR(30);
+
 -- 2. Citoyen (extension de utilisateur)
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS citoyen (
@@ -33,6 +36,8 @@ CREATE TABLE IF NOT EXISTS citoyen (
 );
 
 -- ------------------------------------------------------------
+ALTER TABLE citoyen ADD COLUMN IF NOT EXISTS prenom VARCHAR(120);
+
 -- 3. Association (extension de utilisateur)
 --    Les colonnes de validation sont aussi ajoutees par la
 --    migration us02_us03_associations.sql (ADD COLUMN IF NOT
@@ -94,6 +99,8 @@ CREATE TABLE IF NOT EXISTS signalement (
 );
 
 -- ------------------------------------------------------------
+ALTER TABLE signalement ADD COLUMN IF NOT EXISTS statut VARCHAR(20) NOT NULL DEFAULT 'recu';
+
 -- 7. Dons (US11)
 --    reference est remplie juste apres l'insertion, dans la meme
 --    transaction : 'DON-<annee>-<id sur 4 chiffres>'.
