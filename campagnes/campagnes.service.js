@@ -216,7 +216,8 @@ exports.addUtilisation = async (campagneId, libelle, montant) => {
 // Refuse les dons sur une campagne terminee (date de fin passee ou statut non
 // actif). La ligne campagne est verrouillee : le controle reste valable face a
 // une mise a jour concurrente du statut/des dates.
-exports.createDon = async (campagneId, { montant, estAnonyme, nom, message }) => {
+// citoyenId est fourni uniquement si le don est fait par un citoyen connecte (pas anonyme).
+exports.createDon = async (campagneId, { montant, estAnonyme, nom, message }, citoyenId = null) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -234,10 +235,10 @@ exports.createDon = async (campagneId, { montant, estAnonyme, nom, message }) =>
     }
 
     const inserted = await client.query(
-      `INSERT INTO dons (campagne_id, montant, est_anonyme, nom, message, statut)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO dons (campagne_id, montant, est_anonyme, nom, message, citoyen_id, statut)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id`,
-      [campagneId, montant, estAnonyme, nom, message, 'enregistre']
+      [campagneId, montant, estAnonyme, nom, message, citoyenId, 'enregistre']
     );
 
     // Reference deterministe : DON-<annee>-<id sur 4 chiffres>
@@ -246,7 +247,7 @@ exports.createDon = async (campagneId, { montant, estAnonyme, nom, message }) =>
          SET reference = 'DON-' || to_char(NOW(), 'YYYY') || '-' || lpad(id::text, 4, '0')
        WHERE id = $1
        RETURNING id, reference, campagne_id, montant::float8 AS montant,
-                 est_anonyme, nom, message, date, statut`,
+                 est_anonyme, nom, message, date, statut, citoyen_id`,
       [inserted.rows[0].id]
     );
 
@@ -296,4 +297,25 @@ exports.delete = async (id) => {
   if (result.rowCount === 0) {
     throw echec(404, 'Campagne introuvable');
   }
+};
+
+// US31 : Historique des dons du citoyen
+exports.findDonsByCitoyen = async (citoyenId) => {
+  const { rows } = await pool.query(
+    `SELECT 
+       d.id, d.reference, d.montant::float8 AS montant,
+       d.est_anonyme, d.nom, d.message,
+       to_char(d.date, 'YYYY-MM-DD"T"HH24:MI:SS') AS date,
+       d.statut,
+       c.id AS campagne_id, c.titre AS campagne_titre,
+       COALESCE(a.nom_association, u.nom) AS association_nom
+     FROM dons d
+     JOIN campagnes c ON c.id = d.campagne_id
+     LEFT JOIN association a ON a.id = c.association_id
+     LEFT JOIN utilisateur u ON u.id = c.association_id
+     WHERE d.citoyen_id = $1
+     ORDER BY d.date DESC`,
+    [citoyenId]
+  );
+  return rows;
 };

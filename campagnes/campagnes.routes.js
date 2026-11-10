@@ -7,6 +7,7 @@ const controller = require('./campagnes.controller');
 router.get('/', controller.getAll);
 router.get('/associations', controller.getAssociations);
 router.get('/mes-campagnes', authMiddleware, checkRole('association'), controller.getMine);
+router.get('/mes-dons', authMiddleware, checkRole('citoyen'), controller.getMesDons);
 
 router.get('/:id', controller.getOne);
 

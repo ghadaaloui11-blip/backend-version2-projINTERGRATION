@@ -15,12 +15,12 @@ const TABLE = 'signalement';
 // ::float8 => pg renvoie les NUMERIC en string ; on veut des nombres cote front.
 // Projection SANS citoyen_id : l'anonymat du citoyen est garanti par le fait
 // que l'identite n'est jamais renvoyee, anonyme ou non (privacy by design).
-const COLS = `id, description, photo,
+const COLS = `id, titre, categorie, description, photo,
   latitude::float8 AS latitude,
   longitude::float8 AS longitude,
   est_anonyme, statut, created_at`;
 
-// Liste (filtre optionnel ?statut=..., ?search=..., ?date_debut=..., ?date_fin=...)
+// Liste (filtre optionnel ?statut=..., ?categorie=..., ?search=..., ?date_debut=..., ?date_fin=...)
 // — reservee association/admin (US07)
 router.get('/', authMiddleware, checkRole('association', 'admin'), async (req, res) => {
   try {
@@ -33,9 +33,14 @@ router.get('/', authMiddleware, checkRole('association', 'admin'), async (req, r
       conditions.push('statut = $' + params.length);
     }
 
+    if (req.query.categorie) {
+      params.push(req.query.categorie);
+      conditions.push('categorie = $' + params.length);
+    }
+
     if (req.query.search) {
       params.push(`%${req.query.search}%`);
-      conditions.push('(description ILIKE $' + params.length + ')');
+      conditions.push('(titre ILIKE $' + params.length + ' OR description ILIKE $' + params.length + ')');
     }
 
     if (req.query.date_debut) {

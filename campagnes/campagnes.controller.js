@@ -145,13 +145,16 @@ exports.createDon = async (req, res) => {
     const anonyme = est_anonyme === true || est_anonyme === 'true';
     const nomDonateur = anonyme ? null : (nom ? String(nom).trim() || null : null);
     const messageDon = message ? String(message).trim() || null : null;
+    
+    // Passer le citoyen_id seulement s'il y a un utilisateur connecté (pas anonyme)
+    const citoyenId = req.user && req.user.id ? req.user.id : null;
 
     const don = await campagnesService.createDon(req.params.id, {
       montant: montantNum,
       estAnonyme: anonyme,
       nom: nomDonateur,
       message: messageDon,
-    });
+    }, citoyenId);
 
     // Le front attend directement l'objet du don (comme le faisait le mock)
     res.status(201).json(don);
@@ -221,5 +224,15 @@ exports.deleteCampagne = async (req, res) => {
     res.json({ message: 'Campagne supprimée avec succès' });
   } catch (err) {
     repondreErreur(res, err, 'Erreur lors de la suppression de la campagne.');
+  }
+};
+
+// US31 : Consulter l'historique de ses dons (citoyen)
+exports.getMesDons = async (req, res) => {
+  try {
+    const dons = await campagnesService.findDonsByCitoyen(req.user.id);
+    res.json(dons);
+  } catch (err) {
+    repondreErreur(res, err, 'Erreur lors du chargement de votre historique de dons.');
   }
 };

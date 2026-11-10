@@ -19,8 +19,28 @@ const parserCoordonnee = (valeur, min, max, libelle) => {
 };
 
 exports.creerSignalement = async (data, file, userId) => {
-  const { description, latitude, longitude, est_anonyme } = data || {};
+  const { titre, categorie, description, latitude, longitude, est_anonyme } = data || {};
 
+  // Validation du titre (obligatoire)
+  const titreClean = String(titre || "").trim();
+  if (!titreClean) {
+    throw echec(400, "Le titre est obligatoire.");
+  }
+  if (titreClean.length < 5) {
+    throw echec(400, "Le titre doit contenir au moins 5 caractères.");
+  }
+  if (titreClean.length > 200) {
+    throw echec(400, "Le titre ne peut pas dépasser 200 caractères.");
+  }
+
+  // Validation de la catégorie
+  const categoriesValides = ['Environnement', 'Infrastructure', 'Santé', 'Éducation', 'Social', 'Urgence', 'Autre'];
+  const categorieClean = String(categorie || "Autre").trim();
+  if (!categoriesValides.includes(categorieClean)) {
+    throw echec(400, `Catégorie invalide. Valeurs acceptées : ${categoriesValides.join(', ')}.`);
+  }
+
+  // Validation de la description
   if (!description || !String(description).trim()) {
     throw echec(400, "La description est obligatoire.");
   }
@@ -39,9 +59,9 @@ exports.creerSignalement = async (data, file, userId) => {
     await client.query("BEGIN");
 
     const result = await client.query(
-      `INSERT INTO signalement (description, photo, latitude, longitude, est_anonyme, citoyen_id)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *;`,
-      [description, photoPath, latValue, lonValue, estAnonymeBool, citoyenId]
+      `INSERT INTO signalement (titre, categorie, description, photo, latitude, longitude, est_anonyme, citoyen_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *;`,
+      [titreClean, categorieClean, description, photoPath, latValue, lonValue, estAnonymeBool, citoyenId]
     );
     const signalement = result.rows[0];
 
@@ -63,7 +83,7 @@ exports.creerSignalement = async (data, file, userId) => {
 
 exports.getSignalementById = async (id, userId) => {
   const { rows } = await pool.query(
-    `SELECT id, description, photo,
+    `SELECT id, titre, categorie, description, photo,
      latitude::float8 AS latitude,
      longitude::float8 AS longitude,
      est_anonyme, statut, created_at
@@ -80,11 +100,31 @@ exports.getSignalementById = async (id, userId) => {
 };
 
 exports.updateSignalement = async (id, data, file, userId) => {
-  const { description, latitude, longitude, est_anonyme } = data || {};
+  const { titre, categorie, description, latitude, longitude, est_anonyme } = data || {};
   
   // Vérifier si le signalement existe et appartient à l'utilisateur
   const existing = await exports.getSignalementById(id, userId);
   
+  // Validation du titre (obligatoire)
+  const titreClean = String(titre || "").trim();
+  if (!titreClean) {
+    throw echec(400, "Le titre est obligatoire.");
+  }
+  if (titreClean.length < 5) {
+    throw echec(400, "Le titre doit contenir au moins 5 caractères.");
+  }
+  if (titreClean.length > 200) {
+    throw echec(400, "Le titre ne peut pas dépasser 200 caractères.");
+  }
+
+  // Validation de la catégorie
+  const categoriesValides = ['Environnement', 'Infrastructure', 'Santé', 'Éducation', 'Social', 'Urgence', 'Autre'];
+  const categorieClean = String(categorie || "Autre").trim();
+  if (!categoriesValides.includes(categorieClean)) {
+    throw echec(400, `Catégorie invalide. Valeurs acceptées : ${categoriesValides.join(', ')}.`);
+  }
+
+  // Validation de la description
   if (!description || !String(description).trim()) {
     throw echec(400, "La description est obligatoire.");
   }
@@ -96,9 +136,9 @@ exports.updateSignalement = async (id, data, file, userId) => {
 
   const result = await pool.query(
     `UPDATE signalement 
-     SET description = $1, photo = $2, latitude = $3, longitude = $4, est_anonyme = $5
-     WHERE id = $6 RETURNING *`,
-    [description, photoPath, latValue, lonValue, estAnonymeBool, id]
+     SET titre = $1, categorie = $2, description = $3, photo = $4, latitude = $5, longitude = $6, est_anonyme = $7
+     WHERE id = $8 RETURNING *`,
+    [titreClean, categorieClean, description, photoPath, latValue, lonValue, estAnonymeBool, id]
   );
   
   return result.rows[0];

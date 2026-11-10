@@ -15,7 +15,7 @@ const STATUTS = ["recu", "en_cours", "resolu"];
 // Projection PUBLIQUE : jamais de citoyen_id ni d'information privee.
 // ::float8 => pg renvoie les NUMERIC en string ; on veut des nombres cote front.
 const COLS_PUBLIC = `
-  s.id, s.description, s.photo,
+  s.id, s.titre, s.categorie, s.description, s.photo,
   s.latitude::float8 AS latitude,
   s.longitude::float8 AS longitude,
   s.est_anonyme, s.statut,
@@ -40,7 +40,7 @@ const HISTORIQUE_JOIN = `
   ) hist ON TRUE
 `;
 
-exports.listerPublics = async ({ statut, search, date_debut, date_fin } = {}) => {
+exports.listerPublics = async ({ statut, categorie, search, date_debut, date_fin } = {}) => {
   const params = [];
   const conditions = [];
 
@@ -52,9 +52,14 @@ exports.listerPublics = async ({ statut, search, date_debut, date_fin } = {}) =>
     conditions.push("s.statut = $" + params.length);
   }
 
+  if (categorie) {
+    params.push(categorie);
+    conditions.push("s.categorie = $" + params.length);
+  }
+
   if (search) {
     params.push(`%${search}%`);
-    conditions.push("(s.description ILIKE $" + params.length + ")");
+    conditions.push("(s.titre ILIKE $" + params.length + " OR s.description ILIKE $" + params.length + ")");
   }
 
   if (date_debut) {

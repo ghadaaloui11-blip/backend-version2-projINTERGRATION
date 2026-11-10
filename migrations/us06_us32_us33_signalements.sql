@@ -17,11 +17,18 @@ ALTER TABLE signalement
   ADD COLUMN IF NOT EXISTS date_prise_en_charge TIMESTAMP,
   ADD COLUMN IF NOT EXISTS date_resolution TIMESTAMP;
 
--- 2. Cycle de vie limite a trois etats, conformes aux US :
+-- Corrige aussi les bases existantes dont statut avait deja un autre DEFAULT.
+ALTER TABLE signalement ALTER COLUMN statut SET DEFAULT 'recu';
+
+-- 2. Nettoyer les donnees invalides avant la contrainte
+UPDATE signalement
+SET statut = 'recu'
+WHERE statut IS NULL OR statut NOT IN ('recu', 'en_cours', 'resolu');
+
+-- 3. Cycle de vie limite a trois etats, conformes aux US :
 --      recu     : depose, aucune association ne l'a pris en charge
---      en_cours : une association a pris la responsibility
+--      en_cours : une association a pris la responsabilite
 --      resolu   : situation traitee
---    Les valeurs existantes restent valides ('recu' etait le defaut).
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -33,5 +40,5 @@ BEGIN
   END IF;
 END $$;
 
--- 3. Index pour la consultation courante (par statut, par association)
+-- 4. Index pour la consultation courante (par statut, par association)
 CREATE INDEX IF NOT EXISTS idx_signalement_association ON signalement(association_id);
