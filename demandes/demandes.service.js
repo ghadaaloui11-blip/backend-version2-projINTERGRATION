@@ -1,5 +1,6 @@
 const pool = require("../config/db");
 const { echec } = require("../utils/http");
+const notificationsService = require("../notifications/notifications.service");
 
 exports.creerDemande = async (data, citoyenId) => {
   const categorie = String(data.categorie || "").trim();
@@ -21,6 +22,40 @@ exports.creerDemande = async (data, citoyenId) => {
      RETURNING id, categorie, ville, statut, created_at`,
     [citoyenId, categorie, description, ville, telephone, associationId]
   );
+
+  // 1) Notification de confirmation pour le citoyen
+  if (citoyenId) {
+    await notificationsService.notifier({
+      userId: citoyenId,
+      type: "demande_aide",
+      titre: "Demande d'aide envoyée",
+      message: "Votre demande d'aide (" + categorie + ") a bien été envoyée.",
+    });
+  }
+
+  // 2) Notification pour l'association (précise ou toutes)
+  const message =
+    "Vous avez reçu une nouvelle demande d'aide (" + categorie + ", " + ville + ").";
+
+  if (associationId) {
+    await notificationsService.notifier({
+      userId: associationId,
+      type: "demande_aide",
+      titre: "Nouvelle demande d'aide",
+      message: message,
+    });
+  } else {
+    const assos = await pool.query("SELECT id FROM association");
+    for (let i = 0; i < assos.rows.length; i++) {
+      await notificationsService.notifier({
+        userId: assos.rows[i].id,
+        type: "demande_aide",
+        titre: "Nouvelle demande d'aide",
+        message: message,
+      });
+    }
+  }
+
   return result.rows[0];
 };
 
@@ -45,11 +80,30 @@ exports.changerStatut = async (demandeId, associationId, statut) => {
     `UPDATE demande_aide
      SET statut = $1, association_id = $2
      WHERE id = $3 AND (association_id = $2 OR association_id IS NULL)
-     RETURNING id, statut`,
+     RETURNING id, statut, citoyen_id`,
     [statut, associationId, demandeId]
   );
   if (result.rows.length === 0) {
     throw echec(404, "Demande introuvable.");
   }
-  return result.rows[0];
+
+  const demande = result.rows[0];
+
+  // Notification pour le citoyen (s'il a un compte)
+  if (demande.citoyen_id) {
+    let titre = "Demande d'aide acceptée";
+    let message = "Votre demande d'aide a été acceptée par une association.";
+    if (statut === "refusee") {
+      titre = "Demande d'aide refusée";
+      message = "Votre demande d'aide a été refusée.";
+    }
+    await notificationsService.notifier({
+      userId: demande.citoyen_id,
+      type: "demande_aide_statut",
+      titre: titre,
+      message: message,
+    });
+  }
+
+  return { id: demande.id, statut: demande.statut };
 };

@@ -9,6 +9,7 @@
 //     dans signalement_statut_historique.
 const pool = require("../config/db");
 const { echec } = require("../utils/http");
+const notificationsService = require("../notifications/notifications.service");
 
 const STATUTS = ["recu", "en_cours", "resolu"];
 
@@ -151,6 +152,8 @@ exports.prendreEnCharge = async (signalementId, associationId) => {
   }
 
   const client = await pool.connect();
+  let signalement;
+  let resultat;
   try {
     await client.query("BEGIN");
 
@@ -158,10 +161,10 @@ exports.prendreEnCharge = async (signalementId, associationId) => {
     // tente la meme revendication s'aligne apres nous et ne voit plus
     // association_id IS NULL. Il recoit alors 409.
     const verrouille = await client.query(
-      "SELECT id, association_id, statut FROM signalement WHERE id = $1 FOR UPDATE",
+      "SELECT id, titre, citoyen_id, association_id, statut FROM signalement WHERE id = $1 FOR UPDATE",
       [signalementId]
     );
-    const signalement = verrouille.rows[0];
+    signalement = verrouille.rows[0];
     if (!signalement) {
       throw echec(404, "Signalement introuvable.");
     }
@@ -169,7 +172,7 @@ exports.prendreEnCharge = async (signalementId, associationId) => {
       throw echec(409, "Ce signalement a déjà été pris en charge par une autre association.");
     }
 
-    const resultat = await client.query(
+    resultat = await client.query(
       `UPDATE signalement
        SET association_id = $2, statut = 'en_cours', date_prise_en_charge = NOW()
        WHERE id = $1
@@ -181,13 +184,24 @@ exports.prendreEnCharge = async (signalementId, associationId) => {
     await journaliser(client, signalementId, "en_cours", associationId);
 
     await client.query("COMMIT");
-    return resultat.rows[0];
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
   }
+
+  // Notification pour le citoyen (apres le COMMIT, hors transaction)
+  if (signalement.citoyen_id) {
+    await notificationsService.notifier({
+      userId: signalement.citoyen_id,
+      type: "signalement_statut",
+      titre: "Signalement pris en charge",
+      message: 'Votre signalement "' + signalement.titre + '" est pris en charge par une association.',
+    });
+  }
+
+  return resultat.rows[0];
 };
 
 // US33 : evolution du statut par le responsable uniquement.
@@ -201,15 +215,17 @@ exports.changerStatut = async (signalementId, associationId, statutCible) => {
   }
 
   const client = await pool.connect();
+  let signalement;
+  let resultat;
   try {
     await client.query("BEGIN");
 
     // FOR UPDATE : verrouille la ligne jusqu'au COMMIT.
     const verrouille = await client.query(
-      "SELECT id, association_id, statut FROM signalement WHERE id = $1 FOR UPDATE",
+      "SELECT id, titre, citoyen_id, association_id, statut FROM signalement WHERE id = $1 FOR UPDATE",
       [signalementId]
     );
-    const signalement = verrouille.rows[0];
+    signalement = verrouille.rows[0];
     if (!signalement) {
       throw echec(404, "Signalement introuvable.");
     }
@@ -224,7 +240,7 @@ exports.changerStatut = async (signalementId, associationId, statutCible) => {
       throw echec(409, "Ce signalement doit d'abord être pris en charge.");
     }
 
-    const resultat = await client.query(
+    resultat = await client.query(
       `UPDATE signalement
        SET statut = $3::varchar,
            date_resolution = CASE WHEN $3::varchar = 'resolu' THEN NOW() ELSE NULL END
@@ -237,11 +253,28 @@ exports.changerStatut = async (signalementId, associationId, statutCible) => {
     await journaliser(client, signalementId, statutCible, associationId);
 
     await client.query("COMMIT");
-    return resultat.rows[0];
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
   }
+
+  // Notification pour le citoyen (apres le COMMIT, hors transaction)
+  if (signalement.citoyen_id) {
+    let titreNotif = "Signalement résolu";
+    let messageNotif = 'Votre signalement "' + signalement.titre + '" a été résolu.';
+    if (statutCible === "en_cours") {
+      titreNotif = "Signalement réouvert";
+      messageNotif = 'Votre signalement "' + signalement.titre + '" est de nouveau en cours de traitement.';
+    }
+    await notificationsService.notifier({
+      userId: signalement.citoyen_id,
+      type: "signalement_statut",
+      titre: titreNotif,
+      message: messageNotif,
+    });
+  }
+
+  return resultat.rows[0];
 };

@@ -1,5 +1,6 @@
 const pool   = require('../config/db');
 const { echec } = require('../utils/http');
+const notificationsService = require('../notifications/notifications.service');
 
 const TYPES_VALIDES   = ['Vêtements', 'Nourriture', 'Matériel', 'Mobilier', 'Médicaments', 'Jouets', 'Autre'];
 const STATUTS_VALIDES = ['propose', 'accepte', 'collecte', 'refuse', 'annule'];
@@ -40,9 +41,16 @@ exports.proposer = async (data, citoyenId) => {
                to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS') AS created_at`,
     [citoyenId, type_don, description, quantite, ville]
   );
+
+  await notificationsService.notifier({
+    userId: citoyenId,
+    type: 'don_nature',
+    titre: 'Don en nature proposé',
+    message: 'Votre proposition de don (' + type_don + ') a bien été enregistrée.',
+  });
+
   return rows[0];
 };
-
 // ─── Citoyen : ses propres propositions ───────────────────────────────────
 
 exports.mesDons = async (citoyenId) => {
@@ -131,13 +139,24 @@ exports.accepter = async (donId, associationId, { date_collecte, lieu_collecte, 
          lieu_collecte  = $4,
          commentaire    = $5
      WHERE id = $1 AND statut = 'propose'
-     RETURNING id, statut, association_id, date_collecte, lieu_collecte, commentaire`,
+     RETURNING id, statut, association_id, date_collecte, lieu_collecte, commentaire, citoyen_id`,
     [donId, associationId, date_collecte, lieu_collecte, commentaire || null]
   );
   if (!rows[0]) {
     throw echec(404, "Don introuvable ou déjà pris en charge par une autre association.");
   }
-  return rows[0];
+
+  const don = rows[0];
+  if (don.citoyen_id) {
+    await notificationsService.notifier({
+      userId: don.citoyen_id,
+      type: 'don_nature',
+      titre: 'Don en nature accepté',
+      message: 'Votre don a été accepté. Collecte prévue à : ' + lieu_collecte + '.',
+    });
+  }
+
+  return don;
 };
 
 // ─── Association : marquer comme collecté ─────────────────────────────────
@@ -147,13 +166,24 @@ exports.marquerCollecte = async (donId, associationId) => {
     `UPDATE don_nature
      SET statut = 'collecte'
      WHERE id = $1 AND association_id = $2 AND statut = 'accepte'
-     RETURNING id, statut`,
+     RETURNING id, statut, citoyen_id`,
     [donId, associationId]
   );
   if (!rows[0]) {
     throw echec(404, "Don introuvable, non accepté, ou vous n'en êtes pas responsable.");
   }
-  return rows[0];
+
+  const don = rows[0];
+  if (don.citoyen_id) {
+    await notificationsService.notifier({
+      userId: don.citoyen_id,
+      type: 'don_nature',
+      titre: 'Don en nature collecté',
+      message: 'Votre don a bien été collecté. Merci pour votre générosité !',
+    });
+  }
+
+  return { id: don.id, statut: don.statut };
 };
 
 // ─── Association : refuser un don ─────────────────────────────────────────
@@ -165,11 +195,21 @@ exports.refuser = async (donId, associationId, commentaire) => {
      SET statut      = 'refuse',
          commentaire = $3
      WHERE id = $1 AND association_id = $2 AND statut = 'accepte'
-     RETURNING id, statut`,
+     RETURNING id, statut, citoyen_id`,
     [donId, associationId, commentaire || null]
   );
   if (!rows[0]) {
     throw echec(404, "Don introuvable ou vous n'en êtes pas responsable.");
   }
-  return rows[0];
+
+  const don = rows[0];
+  if (don.citoyen_id) {
+    await notificationsService.notifier({
+      userId: don.citoyen_id,
+      type: 'don_nature',
+      titre: 'Don en nature refusé',
+      message: "Votre don a été refusé par l'association.",
+    });
+  }
+
 };

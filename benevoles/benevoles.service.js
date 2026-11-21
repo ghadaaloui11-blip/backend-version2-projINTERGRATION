@@ -1,5 +1,6 @@
 const pool = require("../config/db");
 const { echec } = require("../utils/http");
+const notificationsService = require("../notifications/notifications.service");
 
 const nettoyer = (data) => {
   const competences = String(data.competences || "").trim();
@@ -15,20 +16,29 @@ const nettoyer = (data) => {
 
 exports.inscrire = async (userId, data) => {
   const b = nettoyer(data);
+  let result;
   try {
-    const result = await pool.query(
+    result = await pool.query(
       `INSERT INTO benevole (utilisateur_id, competences, disponibilites, ville, motivation)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id, competences, disponibilites, ville, motivation`,
       [userId, b.competences, b.disponibilites, b.ville, b.motivation]
     );
-    return result.rows[0];
   } catch (err) {
     if (err.code === "23505") {
       throw echec(400, "Vous êtes déjà inscrit comme bénévole.");
     }
     throw err;
   }
+
+  await notificationsService.notifier({
+    userId: userId,
+    type: "benevole",
+    titre: "Inscription bénévole confirmée",
+    message: "Merci ! Votre inscription comme bénévole a bien été enregistrée.",
+  });
+
+  return result.rows[0];
 };
 
 exports.getMonProfil = async (userId) => {

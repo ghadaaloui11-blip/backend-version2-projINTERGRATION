@@ -1,5 +1,6 @@
 const pool = require("../config/db");
 const { echec } = require("../utils/http");
+const notificationsService = require("../notifications/notifications.service");
 
 // Coordonnee optionnelle mais, si fournie, strictement numerique et bornee.
 // Number() (et non parseFloat) : "12abc" ou "NaN" sont refuses au lieu d'etre
@@ -55,6 +56,7 @@ exports.creerSignalement = async (data, file, userId) => {
   // Insertion + entree initiale du journal dans la meme transaction : un
   // signalement cree sans sa trace "recu" ferait un historique incomplet.
   const client = await pool.connect();
+  let signalement;
   try {
     await client.query("BEGIN");
 
@@ -63,7 +65,7 @@ exports.creerSignalement = async (data, file, userId) => {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *;`,
       [titreClean, categorieClean, description, photoPath, latValue, lonValue, estAnonymeBool, citoyenId]
     );
-    const signalement = result.rows[0];
+    signalement = result.rows[0];
 
     await client.query(
       `INSERT INTO signalement_statut_historique (signalement_id, statut, association_id)
@@ -72,13 +74,24 @@ exports.creerSignalement = async (data, file, userId) => {
     );
 
     await client.query("COMMIT");
-    return signalement;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
   }
+
+  // Notification (apres le COMMIT, hors transaction)
+  if (citoyenId) {
+    await notificationsService.notifier({
+      userId: citoyenId,
+      type: "signalement",
+      titre: "Signalement reçu",
+      message: 'Votre signalement "' + titreClean + '" a bien été enregistré.',
+    });
+  }
+
+  return signalement;
 };
 
 exports.getSignalementById = async (id, userId) => {

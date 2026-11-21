@@ -106,11 +106,12 @@ app.use("/api/users", require("./users/users.routes"));
 app.use("/api/evenements", require("./events/events.routes"));
 // US28 : Demandes d'aide (Sprint 2 - Membre 4)
 app.use("/api/demandes-aide", require("./demandes/demandes.routes"));
+app.use("/api/admin", require("./admin/admin.routes"));
 // US14 : Bénévoles (Sprint 2 - Membre 4)
 app.use("/api/benevoles", require("./benevoles/benevoles.routes"));
 // US13 : Dons en nature
 app.use("/api/dons-nature", require("./dons-nature/dons-nature.routes"));
-
+app.use("/api/notifications", require("./notifications/notifications.routes"));
 app.use((req, res) => {
   res.status(404).json({ erreur: "Route introuvable." });
 });

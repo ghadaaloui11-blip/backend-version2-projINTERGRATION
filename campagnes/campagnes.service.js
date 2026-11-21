@@ -1,5 +1,6 @@
 const pool = require('../config/db'); // adapte si db.js exporte { pool }
 const { echec } = require('../utils/http');
+const notificationsService = require('../notifications/notifications.service');
 
 // Statut effectif : une campagne dont la date de fin est passee est "terminee",
 // sans avoir a ecrire en base (pas de tache planifiee).
@@ -35,7 +36,21 @@ exports.create = async (data, associationId) => {
                statut, association_id`,
     [titre, description, objectif_montant, date_debut, date_fin, associationId]
   );
-  return rows[0];
+  const campagne = rows[0];
+
+  // Notification (centre de notifications seulement, sans email) pour tous les citoyens
+  const citoyens = await pool.query("SELECT id FROM utilisateur WHERE role = 'citoyen'");
+  for (let i = 0; i < citoyens.rows.length; i++) {
+    await notificationsService.notifier({
+      userId: citoyens.rows[i].id,
+      type: 'nouvelle_campagne',
+      titre: 'Nouvelle campagne',
+      message: 'Une nouvelle campagne vient d\'être lancée : "' + campagne.titre + '".',
+      canaux: ['push'],
+    });
+  }
+
+  return campagne;
 };
 
 // US10 : liste des campagnes (par défaut: actives seulement, ?statut=all pour tout)
