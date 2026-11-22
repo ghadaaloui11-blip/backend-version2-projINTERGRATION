@@ -9,6 +9,7 @@ const authMiddleware = require('../middlewares/auth.middleware');
 const checkRole = require('../middlewares/role.middleware');
 const priseEnChargeService = require('./reports.priseEnCharge.service');
 const { repondreErreur } = require('../utils/http');
+const { repondreListe } = require('../utils/filtres');
 
 const TABLE = 'signalement';
 
@@ -74,16 +75,14 @@ router.get('/', authMiddleware, checkRole('association', 'admin'), async (req, r
 // privee ; seule l'association responsable est identifiee.
 // ---------------------------------------------------------------------------
 
-// Liste publique (filtre optionnel ?statut=recu|en_cours|resolu, ?search=...)
+// Liste publique : filtres combines ?statut=&categorie=&ville=&search=
+// &date_debut=&date_fin=&page=&limit=. Aucune authentification requise.
 router.get('/public', async (req, res) => {
   try {
-    const signalements = await priseEnChargeService.listerPublics({
-      statut: req.query.statut,
-      search: req.query.search,
-      date_debut: req.query.date_debut,
-      date_fin: req.query.date_fin
-    });
-    res.json(signalements);
+    const signalements = await priseEnChargeService.listerPublics(req.query);
+    const pagine = req.query.page !== undefined || req.query.limit !== undefined;
+    const total = pagine ? await priseEnChargeService.compterPublics(req.query) : undefined;
+    repondreListe(res, signalements, total);
   } catch (err) {
     repondreErreur(res, err, 'Erreur lors du chargement des signalements.');
   }

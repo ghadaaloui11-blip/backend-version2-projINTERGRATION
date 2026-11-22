@@ -3,14 +3,16 @@ const pool = require("../config/db");
 const notificationsService = require("../notifications/notifications.service");
 
 function startRappelsJob() {
-  // TEST : kol minute. Ba3d el test rajja3ha "*/15 * * * *"
-  cron.schedule("* * * * *", async () => {
+  // Toutes les 15 minutes. Seuls les evenements publies et les inscrits
+  // acceptes sont rappele (et non les demandes en attente ou refusees).
+  cron.schedule("*/15 * * * *", async () => {
     console.log("[rappels] vérification...");
     try {
       const { rows: events } = await pool.query(`
         SELECT id, titre, date_evenement
         FROM evenements
         WHERE rappel_envoye = false
+          AND statut = 'publie'
           AND date_evenement BETWEEN NOW() AND NOW() + INTERVAL '24 hours'
       `);
 
@@ -18,7 +20,7 @@ function startRappelsJob() {
         const { rows: participants } = await pool.query(
           `SELECT citoyen_id
            FROM inscriptions_evenements
-           WHERE evenement_id = $1`,
+           WHERE evenement_id = $1 AND statut = 'accepte'`,
           [ev.id]
         );
 

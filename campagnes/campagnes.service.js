@@ -1,5 +1,8 @@
 const pool = require('../config/db'); // adapte si db.js exporte { pool }
 const { echec } = require('../utils/http');
+const activitesService = require('../activites/activites.service');
+const { ConstructeurFiltres, lirePagination, validerDate, nettoyer } = require('../utils/filtres');
+const { CATEGORIES_CAMPAGNE } = require('../utils/categories');
 
 // Statut effectif : une campagne dont la date de fin est passee est "terminee",
 // sans avoir a ecrire en base (pas de tache planifiee).
@@ -13,6 +16,7 @@ const COLS = `c.id, c.titre, c.description,
   to_char(c.date_debut, 'YYYY-MM-DD') AS date_debut,
   to_char(c.date_fin, 'YYYY-MM-DD') AS date_fin,
   ${STATUT_SQL} AS statut, c.association_id,
+  c.ville, c.categorie,
   COALESCE(a.nom_association, u.nom) AS association_nom`;
 
 // Jointure commune : nom de l'association proprietaire de la campagne
@@ -23,59 +27,80 @@ const JOINS = `FROM campagnes c
 exports.create = async (data, associationId) => {
   const { titre, description, objectif_montant, date_debut, date_fin } = data;
 
+  // US38 : categorie obligatoire par defaut 'Autre' ; une valeur explicite
+  // invalide est refusee (les filtres en lecture, eux, sont tolerants).
+  const categorie = nettoyer(data.categorie) || 'Autre';
+  if (!CATEGORIES_CAMPAGNE.includes(categorie)) {
+    throw echec(400, `Catégorie invalide. Valeurs acceptées : ${CATEGORIES_CAMPAGNE.join(', ')}.`);
+  }
+  const ville = nettoyer(data.ville);
+
   const { rows } = await pool.query(
     `INSERT INTO campagnes
-       (titre, description, objectif_montant, date_debut, date_fin, association_id)
-     VALUES ($1, $2, $3, $4, $5, $6)
+       (titre, description, objectif_montant, date_debut, date_fin, association_id, ville, categorie)
+     VALUES ($1, $2, $3, $4, $5, $6,
+             COALESCE($7, (SELECT ville FROM association WHERE id = $6)), $8)
      RETURNING id, titre, description,
                objectif_montant::float8 AS objectif_montant,
                montant_collecte::float8 AS montant_collecte,
                to_char(date_debut, 'YYYY-MM-DD') AS date_debut,
                to_char(date_fin, 'YYYY-MM-DD') AS date_fin,
-               statut, association_id`,
-    [titre, description, objectif_montant, date_debut, date_fin, associationId]
+               statut, association_id, ville, categorie`,
+    [titre, description, objectif_montant, date_debut, date_fin, associationId, ville, categorie]
   );
   return rows[0];
 };
 
+// US10 / US38 : construction mutualisee des filtres de campagnes. Utilisee
+// a la fois par findAll (donnees) et compter (X-Total-Count).
+const construireFiltresCampagnes = (query = {}) => {
+  const { statut = 'active', search, ville, categorie, date_debut, date_fin, association_id } = query || {};
+  const filtres = new ConstructeurFiltres();
+
+  filtres.exact(STATUT_SQL, statut, ['all']);
+  filtres.recherche(['c.titre', 'c.description'], search);
+  filtres.ilike('c.ville', ville);
+  filtres.exact('c.categorie', categorie, ['Toutes']);
+  filtres.nombre('c.association_id', association_id);
+
+  const debut = validerDate(date_debut, 'date_debut');
+  const fin = validerDate(date_fin, 'date_fin');
+  if (debut) filtres.brut('c.date_debut >= ?::date', [debut]);
+  if (fin) filtres.brut('c.date_fin <= ?::date', [fin]);
+
+  return { filtres, pagination: lirePagination(query) };
+};
+
 // US10 : liste des campagnes (par défaut: actives seulement, ?statut=all pour tout)
-// Filtres avancés : ?statut=..., ?search=..., ?date_debut=..., ?date_fin=..., ?association_id=...
-exports.findAll = async ({ statut = 'active', search, date_debut, date_fin, association_id } = {}) => {
-  const params = [];
-  const where = [];
-
-  if (statut !== 'all') {
-    params.push(statut);
-    where.push(`${STATUT_SQL} = $${params.length}`);
-  }
-
-  if (search) {
-    params.push(`%${search}%`);
-    where.push(`(c.titre ILIKE $${params.length} OR c.description ILIKE $${params.length})`);
-  }
-
-  if (date_debut) {
-    params.push(date_debut);
-    where.push(`c.date_debut >= $${params.length}`);
-  }
-
-  if (date_fin) {
-    params.push(date_fin);
-    where.push(`c.date_fin <= $${params.length}`);
-  }
-
-  if (association_id) {
-    params.push(association_id);
-    where.push(`c.association_id = $${params.length}`);
-  }
+// Filtres avancés : ?statut=..., ?search=..., ?ville=..., ?categorie=...,
+// ?date_debut=..., ?date_fin=..., ?association_id=..., ?page=..., ?limit=...
+exports.findAll = async (query = {}) => {
+  const { filtres, pagination } = construireFiltresCampagnes(query);
+  const limiteSql = pagination.actif
+    ? `LIMIT $${filtres.parametres.length + 1} OFFSET $${filtres.parametres.length + 2}`
+    : '';
+  const params = pagination.actif
+    ? [...filtres.parametres, pagination.limit, pagination.offset]
+    : filtres.parametres;
 
   const { rows } = await pool.query(
     `SELECT ${COLS} ${JOINS}
-     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-     ORDER BY c.id DESC`,
+     ${filtres.clause()}
+     ORDER BY c.id DESC
+     ${limiteSql}`,
     params
   );
   return rows;
+};
+
+// Total des lignes correspondant aux memes filtres (sans pagination).
+exports.compter = async (query = {}) => {
+  const { filtres } = construireFiltresCampagnes(query);
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS total ${JOINS} ${filtres.clause()}`,
+    filtres.parametres
+  );
+  return rows[0].total;
 };
 
 // US10 : détail d'une campagne
@@ -217,13 +242,18 @@ exports.addUtilisation = async (campagneId, libelle, montant) => {
 // actif). La ligne campagne est verrouillee : le controle reste valable face a
 // une mise a jour concurrente du statut/des dates.
 // citoyenId est fourni uniquement si le don est fait par un citoyen connecte (pas anonyme).
-exports.createDon = async (campagneId, { montant, estAnonyme, nom, message }, citoyenId = null) => {
+exports.createDon = async (
+  campagneId,
+  { montant, estAnonyme, nom, message },
+  citoyenId = null,
+  utilisateurId = null
+) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
     const camp = await client.query(
-      `SELECT id, (date_fin < CURRENT_DATE OR statut <> 'active') AS fermee
+      `SELECT id, titre, (date_fin < CURRENT_DATE OR statut <> 'active') AS fermee
        FROM campagnes WHERE id = $1 FOR UPDATE`,
       [campagneId]
     );
@@ -256,6 +286,21 @@ exports.createDon = async (campagneId, { montant, estAnonyme, nom, message }, ci
       [montant, campagneId]
     );
 
+    // US37 / Q13 : trace du don dans le journal PRIVE de l'auteur, meme quand
+    // le don public est anonyme (le libelle porte alors "Don anonyme").
+    await activitesService.enregistrerActivite(client, {
+      utilisateurId: utilisateurId || citoyenId,
+      type: activitesService.TYPES.DON,
+      refTable: 'dons',
+      refId: inserted.rows[0].id,
+      libelle: `${estAnonyme ? 'Don anonyme' : 'Don'} à la campagne « ${camp.rows[0].titre} »`,
+      metadata: {
+        campagne_id: campagneId,
+        montant: Number(montant),
+        est_anonyme: Boolean(estAnonyme),
+      },
+    });
+
     await client.query('COMMIT');
 
     const don = rows[0];
@@ -271,17 +316,24 @@ exports.createDon = async (campagneId, { montant, estAnonyme, nom, message }, ci
 exports.update = async (id, data) => {
   const { titre, description, objectif_montant, date_debut, date_fin } = data;
 
+  const categorie = nettoyer(data.categorie);
+  if (categorie && !CATEGORIES_CAMPAGNE.includes(categorie)) {
+    throw echec(400, `Catégorie invalide. Valeurs acceptées : ${CATEGORIES_CAMPAGNE.join(', ')}.`);
+  }
+  const ville = nettoyer(data.ville);
+
   const { rows } = await pool.query(
     `UPDATE campagnes 
-     SET titre = $1, description = $2, objectif_montant = $3, date_debut = $4, date_fin = $5
-     WHERE id = $6 
+     SET titre = $1, description = $2, objectif_montant = $3, date_debut = $4, date_fin = $5,
+         ville = COALESCE($6, ville), categorie = COALESCE($7, categorie)
+     WHERE id = $8 
      RETURNING id, titre, description,
                objectif_montant::float8 AS objectif_montant,
                montant_collecte::float8 AS montant_collecte,
                to_char(date_debut, 'YYYY-MM-DD') AS date_debut,
                to_char(date_fin, 'YYYY-MM-DD') AS date_fin,
-               statut, association_id`,
-    [titre, description, objectif_montant, date_debut, date_fin, id]
+               statut, association_id, ville, categorie`,
+    [titre, description, objectif_montant, date_debut, date_fin, ville, categorie, id]
   );
   
   if (!rows[0]) {

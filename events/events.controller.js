@@ -1,5 +1,6 @@
 const eventsService = require('./events.service');
 const { repondreErreur } = require('../utils/http');
+const { repondreListe } = require('../utils/filtres');
 const associationsService = require('../associations/associations.service');
 
 const exigerAssociationApprouvee = async (req, res) => {
@@ -37,9 +38,8 @@ exports.creer = async (req, res) => {
 // US17 : Lister les événements (Public / Citoyen avec filtres)
 exports.lister = async (req, res) => {
   try {
-    const { ville, categorie, date, search, statut } = req.query;
-    const events = await eventsService.findAllEvents({ ville, categorie, date, search, statut });
-    res.json(events);
+    const events = await eventsService.findAllEvents(req.query);
+    repondreListe(res, events);
   } catch (err) {
     repondreErreur(res, err, 'Erreur lors de la récupération des événements.');
   }
@@ -50,6 +50,8 @@ exports.details = async (req, res) => {
   try {
     const citoyenId = req.user ? req.user.id : null;
     const event = await eventsService.findEventById(req.params.id, citoyenId);
+    // Un visiteur anonyme ne voit que les evenements publies (decision Q13/US19).
+    if (!event) return res.status(404).json({ erreur: 'Événement introuvable.' });
     res.json(event);
   } catch (err) {
     repondreErreur(res, err, 'Erreur lors de la récupération de l\'événement.');

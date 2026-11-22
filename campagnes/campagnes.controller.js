@@ -1,5 +1,6 @@
 const campagnesService = require('./campagnes.service');
 const { repondreErreur } = require('../utils/http');
+const { repondreListe } = require('../utils/filtres');
 
 const associationsService = require('../associations/associations.service');
 
@@ -44,14 +45,13 @@ exports.createCampagne = async (req, res) => {
   }
 };
 
-// US10
+// US10 / US38 : liste publique avec filtres combines et pagination.
 exports.getAll = async (req, res) => {
   try {
-    const campagnes = await campagnesService.findAll({
-      statut: req.query.statut,
-      search: req.query.search,
-    });
-    res.json(campagnes);
+    const campagnes = await campagnesService.findAll(req.query);
+    const pagine = req.query.page !== undefined || req.query.limit !== undefined;
+    const total = pagine ? await campagnesService.compter(req.query) : undefined;
+    repondreListe(res, campagnes, total);
   } catch (err) {
     repondreErreur(res, err, 'Erreur lors du chargement des campagnes.');
   }
@@ -146,15 +146,17 @@ exports.createDon = async (req, res) => {
     const nomDonateur = anonyme ? null : (nom ? String(nom).trim() || null : null);
     const messageDon = message ? String(message).trim() || null : null;
     
-    // Passer le citoyen_id seulement s'il y a un utilisateur connecté (pas anonyme)
-    const citoyenId = req.user && req.user.id ? req.user.id : null;
+    // Le don public est anonymise (citoyen_id = NULL), mais l'auteur garde une
+    // trace PRIVEE dans son journal (decision Q13).
+    const utilisateurId = req.user && req.user.id ? req.user.id : null;
+    const citoyenId = anonyme ? null : utilisateurId;
 
     const don = await campagnesService.createDon(req.params.id, {
       montant: montantNum,
       estAnonyme: anonyme,
       nom: nomDonateur,
       message: messageDon,
-    }, citoyenId);
+    }, citoyenId, utilisateurId);
 
     // Le front attend directement l'objet du don (comme le faisait le mock)
     res.status(201).json(don);

@@ -1,5 +1,7 @@
 const pool = require("../config/db");
 const { echec } = require("../utils/http");
+const activitesService = require("../activites/activites.service");
+const { CATEGORIES_SIGNALEMENT } = require("../utils/categories");
 
 // Coordonnee optionnelle mais, si fournie, strictement numerique et bornee.
 // Number() (et non parseFloat) : "12abc" ou "NaN" sont refuses au lieu d'etre
@@ -19,7 +21,8 @@ const parserCoordonnee = (valeur, min, max, libelle) => {
 };
 
 exports.creerSignalement = async (data, file, userId) => {
-  const { titre, categorie, description, latitude, longitude, est_anonyme } = data || {};
+  const { titre, categorie, description, latitude, longitude, est_anonyme, ville } = data || {};
+  const villeClean = String(ville || '').trim() || null;
 
   // Validation du titre (obligatoire)
   const titreClean = String(titre || "").trim();
@@ -34,7 +37,7 @@ exports.creerSignalement = async (data, file, userId) => {
   }
 
   // Validation de la catégorie
-  const categoriesValides = ['Environnement', 'Infrastructure', 'Santé', 'Éducation', 'Social', 'Urgence', 'Autre'];
+  const categoriesValides = CATEGORIES_SIGNALEMENT;
   const categorieClean = String(categorie || "Autre").trim();
   if (!categoriesValides.includes(categorieClean)) {
     throw echec(400, `Catégorie invalide. Valeurs acceptées : ${categoriesValides.join(', ')}.`);
@@ -59,9 +62,9 @@ exports.creerSignalement = async (data, file, userId) => {
     await client.query("BEGIN");
 
     const result = await client.query(
-      `INSERT INTO signalement (titre, categorie, description, photo, latitude, longitude, est_anonyme, citoyen_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *;`,
-      [titreClean, categorieClean, description, photoPath, latValue, lonValue, estAnonymeBool, citoyenId]
+      `INSERT INTO signalement (titre, categorie, description, photo, latitude, longitude, est_anonyme, citoyen_id, ville)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *;`,
+      [titreClean, categorieClean, description, photoPath, latValue, lonValue, estAnonymeBool, citoyenId, villeClean]
     );
     const signalement = result.rows[0];
 
@@ -70,6 +73,17 @@ exports.creerSignalement = async (data, file, userId) => {
        VALUES ($1, 'recu', NULL)`,
       [signalement.id]
     );
+
+    // US37 / Q13 : le signalement reste anonyme cote public (citoyen_id = NULL)
+    // mais l'auteur en garde une trace dans son historique PRIVE.
+    await activitesService.enregistrerActivite(client, {
+      utilisateurId: userId,
+      type: activitesService.TYPES.SIGNALEMENT,
+      refTable: "signalement",
+      refId: signalement.id,
+      libelle: `Signalement « ${titreClean} » envoyé${estAnonymeBool ? ' (anonyme)' : ''}`,
+      metadata: { categorie: categorieClean, est_anonyme: estAnonymeBool },
+    });
 
     await client.query("COMMIT");
     return signalement;
@@ -86,7 +100,7 @@ exports.getSignalementById = async (id, userId) => {
     `SELECT id, titre, categorie, description, photo,
      latitude::float8 AS latitude,
      longitude::float8 AS longitude,
-     est_anonyme, statut, created_at
+     est_anonyme, statut, ville, created_at
      FROM signalement 
      WHERE id = $1`,
     [id]
@@ -99,10 +113,27 @@ exports.getSignalementById = async (id, userId) => {
   return rows[0];
 };
 
+// US07 : seul le createur peut modifier ou supprimer son signalement.
+// Un signalement anonyme a citoyen_id = NULL : personne ne peut plus le modifier,
+// ce qui est coherent avec l'anonymat garanti a la creation.
+const exigerProprietaire = async (id, userId) => {
+  const { rows } = await pool.query(
+    "SELECT citoyen_id FROM signalement WHERE id = $1",
+    [id]
+  );
+  if (!rows[0]) {
+    throw echec(404, "Signalement introuvable");
+  }
+  if (rows[0].citoyen_id === null || Number(rows[0].citoyen_id) !== Number(userId)) {
+    throw echec(403, "Vous n'êtes pas autorisé à modifier ce signalement.");
+  }
+};
+
 exports.updateSignalement = async (id, data, file, userId) => {
-  const { titre, categorie, description, latitude, longitude, est_anonyme } = data || {};
-  
+  const { titre, categorie, description, latitude, longitude, est_anonyme, ville } = data || {};
+
   // Vérifier si le signalement existe et appartient à l'utilisateur
+  await exigerProprietaire(id, userId);
   const existing = await exports.getSignalementById(id, userId);
   
   // Validation du titre (obligatoire)
@@ -118,7 +149,7 @@ exports.updateSignalement = async (id, data, file, userId) => {
   }
 
   // Validation de la catégorie
-  const categoriesValides = ['Environnement', 'Infrastructure', 'Santé', 'Éducation', 'Social', 'Urgence', 'Autre'];
+  const categoriesValides = CATEGORIES_SIGNALEMENT;
   const categorieClean = String(categorie || "Autre").trim();
   if (!categoriesValides.includes(categorieClean)) {
     throw echec(400, `Catégorie invalide. Valeurs acceptées : ${categoriesValides.join(', ')}.`);
@@ -136,17 +167,18 @@ exports.updateSignalement = async (id, data, file, userId) => {
 
   const result = await pool.query(
     `UPDATE signalement 
-     SET titre = $1, categorie = $2, description = $3, photo = $4, latitude = $5, longitude = $6, est_anonyme = $7
+     SET titre = $1, categorie = $2, description = $3, photo = $4, latitude = $5, longitude = $6, est_anonyme = $7,
+         ville = COALESCE($9, ville)
      WHERE id = $8 RETURNING *`,
-    [titreClean, categorieClean, description, photoPath, latValue, lonValue, estAnonymeBool, id]
+    [titreClean, categorieClean, description, photoPath, latValue, lonValue, estAnonymeBool, id, String(ville || '').trim() || null]
   );
   
   return result.rows[0];
 };
 
 exports.deleteSignalement = async (id, userId) => {
-  // Vérifier si le signalement existe
-  const existing = await exports.getSignalementById(id, userId);
-  
+  // Vérifier si le signalement existe et appartient au citoyen connecte
+  await exigerProprietaire(id, userId);
+
   await pool.query("DELETE FROM signalement WHERE id = $1", [id]);
 };

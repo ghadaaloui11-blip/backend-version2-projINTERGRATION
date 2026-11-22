@@ -8,7 +8,7 @@
     "dev": "node --watch server.js",
     "migrate": "node migrations/run.js",
     "create-admin": "node migrations/create-admin.js",
-    "test": "node --test"
+    "test": "node --test test/api.test.js"
   },
   "repository": {
     "type": "git",

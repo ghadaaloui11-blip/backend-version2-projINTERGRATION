@@ -1,5 +1,7 @@
 const pool = require("../config/db");
 const { echec } = require("../utils/http");
+const activitesService = require("../activites/activites.service");
+const { avecTransaction } = require("../utils/db");
 
 const nettoyer = (data) => {
   const competences = String(data.competences || "").trim();
@@ -16,13 +18,25 @@ const nettoyer = (data) => {
 exports.inscrire = async (userId, data) => {
   const b = nettoyer(data);
   try {
-    const result = await pool.query(
-      `INSERT INTO benevole (utilisateur_id, competences, disponibilites, ville, motivation)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, competences, disponibilites, ville, motivation`,
-      [userId, b.competences, b.disponibilites, b.ville, b.motivation]
-    );
-    return result.rows[0];
+    return await avecTransaction(async (client) => {
+      const result = await client.query(
+        `INSERT INTO benevole (utilisateur_id, competences, disponibilites, ville, motivation)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, competences, disponibilites, ville, motivation`,
+        [userId, b.competences, b.disponibilites, b.ville, b.motivation]
+      );
+
+      await activitesService.enregistrerActivite(client, {
+        utilisateurId: userId,
+        type: activitesService.TYPES.BENEVOLAT,
+        refTable: 'benevole',
+        refId: result.rows[0].id,
+        libelle: 'Inscription comme bénévole',
+        metadata: { ville: b.ville },
+      });
+
+      return result.rows[0];
+    });
   } catch (err) {
     if (err.code === "23505") {
       throw echec(400, "Vous êtes déjà inscrit comme bénévole.");

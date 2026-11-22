@@ -110,6 +110,21 @@ app.use("/api/demandes-aide", require("./demandes/demandes.routes"));
 app.use("/api/benevoles", require("./benevoles/benevoles.routes"));
 // US13 : Dons en nature
 app.use("/api/dons-nature", require("./dons-nature/dons-nature.routes"));
+// US21 : centre de notifications (rappels d'evenements inclus)
+app.use("/api/notifications", require("./notifications/notifications.routes"));
+// US37 : historique d'activite (source commune US24 / US26)
+app.use("/api/activites", require("./activites/activites.routes"));
+// US24 : points d'engagement et badges
+app.use("/api/engagement", require("./engagement/engagement.routes"));
+// US26 : defis (challenges), participations et preuves
+app.use("/api/defis", require("./defis/defis.routes"));
+// US19 : page de partage publique avec balises OG (hors /api)
+app.use("/evenements", require("./events/events.share.routes"));
+// US19 : image OG statique (Q17)
+const publicDir = path.join(__dirname, "public");
+app.use(express.static(publicDir));
+// US22 : tableau de bord administrateur
+app.use("/api/admin", require("./admin/admin.routes"));
 
 app.use((req, res) => {
   res.status(404).json({ erreur: "Route introuvable." });

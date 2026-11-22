@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { echec } = require('../utils/http');
+const { ConstructeurFiltres, lirePagination } = require('../utils/filtres');
 
 // US02 : Déposer un document légal pour l'association connectée
 exports.ajouterDocument = async (associationId, typeDocument, filePath, nomOriginal) => {
@@ -122,23 +123,51 @@ exports.getMonStatut = async (associationId) => {
   );
   return rows[0];
 };
-// Liste publique : seulement les associations approuvees, champs non sensibles
-exports.listerAssociationsPubliques = async (recherche) => {
-  const params = [];
-  let filtre = '';
-  if (recherche) {
-    params.push('%' + recherche.trim() + '%');
-    filtre = `AND (a.nom_association ILIKE $1 OR a.adresse ILIKE $1)`;
-  }
+// US03 / US38 : liste publique des associations approuvees.
+// Projection volontairement restrictive : aucun telephone/email de contact (R5).
+const FILTRES_ASSOCIATION = `
+  FROM association a
+  JOIN utilisateur u ON u.id = a.id
+`;
+
+const construireFiltresAssociations = (query = {}) => {
+  const { recherche, search, ville, categorie } = query || {};
+  const filtres = new ConstructeurFiltres();
+  // Condition de base : une seule clause WHERE est produite par le constructeur.
+  filtres.brut("a.statut_validation = 'approuve'");
+  // `recherche` est le parametre historique ; `search` est celui de la
+  // barre de filtres partagee. Les deux sont acceptes.
+  filtres.recherche(['a.nom_association', 'a.adresse'], recherche || search);
+  filtres.ilike('a.ville', ville);
+  filtres.exact('a.categorie', categorie, ['Toutes']);
+  return { filtres, pagination: lirePagination(query) };
+};
+
+exports.listerAssociationsPubliques = async (query = {}) => {
+  const { filtres, pagination } = construireFiltresAssociations(query);
+  const limiteSql = pagination.actif
+    ? `LIMIT $${filtres.parametres.length + 1} OFFSET $${filtres.parametres.length + 2}`
+    : '';
+  const params = pagination.actif
+    ? [...filtres.parametres, pagination.limit, pagination.offset]
+    : filtres.parametres;
 
   const { rows } = await pool.query(
-    `SELECT a.id, a.nom_association, a.adresse, u.telephone
-     FROM association a
-     JOIN utilisateur u ON u.id = a.id
-     WHERE a.statut_validation = 'approuve'
-     ${filtre}
-     ORDER BY a.nom_association ASC`,
+    `SELECT a.id, a.nom_association, a.adresse, a.ville, a.categorie
+     ${FILTRES_ASSOCIATION}
+     ${filtres.clause()}
+     ORDER BY a.nom_association ASC
+     ${limiteSql}`,
     params
   );
   return rows;
+};
+
+exports.compterAssociationsPubliques = async (query = {}) => {
+  const { filtres } = construireFiltresAssociations(query);
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS total ${FILTRES_ASSOCIATION} ${filtres.clause()}`,
+    filtres.parametres
+  );
+  return rows[0].total;
 };

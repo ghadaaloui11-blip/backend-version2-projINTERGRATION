@@ -9,6 +9,7 @@
 //     dans signalement_statut_historique.
 const pool = require("../config/db");
 const { echec } = require("../utils/http");
+const { ConstructeurFiltres, lirePagination, validerDate } = require("../utils/filtres");
 
 const STATUTS = ["recu", "en_cours", "resolu"];
 
@@ -18,7 +19,7 @@ const COLS_PUBLIC = `
   s.id, s.titre, s.categorie, s.description, s.photo,
   s.latitude::float8 AS latitude,
   s.longitude::float8 AS longitude,
-  s.est_anonyme, s.statut,
+  s.est_anonyme, s.statut, s.ville,
   s.created_at, s.date_prise_en_charge, s.date_resolution,
   s.association_id, a.nom_association,
   hist.historique
@@ -40,50 +41,62 @@ const HISTORIQUE_JOIN = `
   ) hist ON TRUE
 `;
 
-exports.listerPublics = async ({ statut, categorie, search, date_debut, date_fin } = {}) => {
-  const params = [];
-  const conditions = [];
+const LISTE_PUBLIQUE_FROM = `
+  FROM signalement s
+  LEFT JOIN association a ON a.id = s.association_id
+  ${HISTORIQUE_JOIN}
+`;
 
-  if (statut) {
-    if (!STATUTS.includes(statut)) {
-      throw echec(400, "Statut invalide. Valeurs acceptées : recu, en_cours, resolu.");
-    }
-    params.push(statut);
-    conditions.push("s.statut = $" + params.length);
+// US06 / US32 / US38 : liste publique filtrable. Le statut reste strict
+// (400 si invalide) ; une categorie ou une ville inconnue renvoie simplement
+// une liste vide (decision Q10).
+const construireFiltresPublics = (query = {}) => {
+  const { statut, categorie, ville, search, date_debut, date_fin } = query || {};
+  const filtres = new ConstructeurFiltres();
+
+  if (statut && !STATUTS.includes(statut)) {
+    throw echec(400, "Statut invalide. Valeurs acceptées : recu, en_cours, resolu.");
   }
+  filtres.exact('s.statut', statut);
+  filtres.exact('s.categorie', categorie, ['Toutes']);
+  filtres.ilike('s.ville', ville);
+  filtres.recherche(['s.titre', 's.description'], search);
 
-  if (categorie) {
-    params.push(categorie);
-    conditions.push("s.categorie = $" + params.length);
-  }
+  const debut = validerDate(date_debut, 'date_debut');
+  const fin = validerDate(date_fin, 'date_fin');
+  if (debut) filtres.brut('s.created_at >= ?', [debut]);
+  if (fin) filtres.brut('s.created_at <= ?', [fin]);
 
-  if (search) {
-    params.push(`%${search}%`);
-    conditions.push("(s.titre ILIKE $" + params.length + " OR s.description ILIKE $" + params.length + ")");
-  }
+  return { filtres, pagination: lirePagination(query) };
+};
 
-  if (date_debut) {
-    params.push(date_debut);
-    conditions.push("s.created_at >= $" + params.length);
-  }
-
-  if (date_fin) {
-    params.push(date_fin);
-    conditions.push("s.created_at <= $" + params.length);
-  }
-
-  const where = conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
+exports.listerPublics = async (query = {}) => {
+  const { filtres, pagination } = construireFiltresPublics(query);
+  const limiteSql = pagination.actif
+    ? `LIMIT $${filtres.parametres.length + 1} OFFSET $${filtres.parametres.length + 2}`
+    : '';
+  const params = pagination.actif
+    ? [...filtres.parametres, pagination.limit, pagination.offset]
+    : filtres.parametres;
 
   const { rows } = await pool.query(
     `SELECT ${COLS_PUBLIC}
-     FROM signalement s
-     LEFT JOIN association a ON a.id = s.association_id
-     ${HISTORIQUE_JOIN}
-     ${where}
-     ORDER BY s.id DESC`,
+     ${LISTE_PUBLIQUE_FROM}
+     ${filtres.clause()}
+     ORDER BY s.id DESC
+     ${limiteSql}`,
     params
   );
   return rows;
+};
+
+exports.compterPublics = async (query = {}) => {
+  const { filtres } = construireFiltresPublics(query);
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS total ${LISTE_PUBLIQUE_FROM} ${filtres.clause()}`,
+    filtres.parametres
+  );
+  return rows[0].total;
 };
 
 exports.voirPublic = async (id) => {

@@ -1,5 +1,7 @@
 const pool   = require('../config/db');
 const { echec } = require('../utils/http');
+const activitesService = require('../activites/activites.service');
+const { avecTransaction } = require('../utils/db');
 
 const TYPES_VALIDES   = ['Vêtements', 'Nourriture', 'Matériel', 'Mobilier', 'Médicaments', 'Jouets', 'Autre'];
 const STATUTS_VALIDES = ['propose', 'accepte', 'collecte', 'refuse', 'annule'];
@@ -143,17 +145,36 @@ exports.accepter = async (donId, associationId, { date_collecte, lieu_collecte, 
 // ─── Association : marquer comme collecté ─────────────────────────────────
 
 exports.marquerCollecte = async (donId, associationId) => {
-  const { rows } = await pool.query(
-    `UPDATE don_nature
-     SET statut = 'collecte'
-     WHERE id = $1 AND association_id = $2 AND statut = 'accepte'
-     RETURNING id, statut`,
-    [donId, associationId]
-  );
-  if (!rows[0]) {
-    throw echec(404, "Don introuvable, non accepté, ou vous n'en êtes pas responsable.");
-  }
-  return rows[0];
+  return avecTransaction(async (client) => {
+    const { rows: avant } = await client.query(
+      `SELECT citoyen_id, type_don FROM don_nature
+       WHERE id = $1 AND association_id = $2 AND statut = 'accepte'`,
+      [donId, associationId]
+    );
+    if (!avant[0]) {
+      throw echec(404, "Don introuvable, non accepté, ou vous n'en êtes pas responsable.");
+    }
+
+    const { rows } = await client.query(
+      `UPDATE don_nature
+       SET statut = 'collecte'
+       WHERE id = $1 AND association_id = $2 AND statut = 'accepte'
+       RETURNING id, statut`,
+      [donId, associationId]
+    );
+
+    // US37 / US24 : le don ne compte comme engagement qu'une fois collecte.
+    await activitesService.enregistrerActivite(client, {
+      utilisateurId: avant[0].citoyen_id,
+      type: activitesService.TYPES.DON_NATURE_COLLECTE,
+      refTable: 'don_nature',
+      refId: donId,
+      libelle: `Don en nature collecté : ${avant[0].type_don}`,
+      metadata: { type_don: avant[0].type_don },
+    });
+
+    return rows[0];
+  });
 };
 
 // ─── Association : refuser un don ─────────────────────────────────────────

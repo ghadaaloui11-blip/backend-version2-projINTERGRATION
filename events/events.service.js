@@ -1,5 +1,9 @@
 const pool = require('../config/db');
 const { echec } = require('../utils/http');
+const activitesService = require('../activites/activites.service');
+const engagementService = require('../engagement/engagement.service');
+const { avecTransaction } = require('../utils/db');
+const { ConstructeurFiltres, lirePagination } = require('../utils/filtres');
 
 // Helper colonnes et jointures pour un événement
 const SELECT_EVENEMENT = `
@@ -64,48 +68,34 @@ exports.createEvent = async (data, associationId) => {
   return rows[0];
 };
 
-// US17 : Consultation et filtres des événements (par ville, catégorie, date, mot-clé)
-exports.findAllEvents = async ({ ville, categorie, date, search, statut = 'publie', association_id } = {}) => {
-  const params = [];
-  const where = [];
+// US17 / US38 : filtres evenements (ville, categorie, date, mot-cle).
+// Refactorise sur le constructeur de filtres partage : le comportement est
+// identique, avec en plus une pagination optionnelle (?page=&limit=).
+exports.findAllEvents = async (query = {}) => {
+  const { ville, categorie, date, search, statut = 'publie', association_id } = query || {};
+  const filtres = new ConstructeurFiltres();
 
-  if (statut && statut !== 'all') {
-    params.push(statut);
-    where.push(`e.statut = $${params.length}`);
-  }
+  filtres.exact('e.statut', statut, ['all']);
+  filtres.nombre('e.association_id', association_id);
+  filtres.ilike('e.ville', ville);
+  filtres.exact('e.categorie', categorie, ['Toutes']);
+  filtres.dateExacte('e.date_evenement', date);
+  filtres.recherche(['e.titre', 'e.description', 'e.lieu'], search);
 
-  if (association_id) {
-    params.push(association_id);
-    where.push(`e.association_id = $${params.length}`);
-  }
-
-  if (ville) {
-    params.push(`%${ville.trim()}%`);
-    where.push(`e.ville ILIKE $${params.length}`);
-  }
-
-  if (categorie && categorie !== 'Toutes') {
-    params.push(categorie.trim());
-    where.push(`e.categorie = $${params.length}`);
-  }
-
-  if (date) {
-    params.push(date);
-    where.push(`DATE(e.date_evenement) = $${params.length}::date`);
-  }
-
-  if (search) {
-    params.push(`%${search.trim()}%`);
-    where.push(`(e.titre ILIKE $${params.length} OR e.description ILIKE $${params.length} OR e.lieu ILIKE $${params.length})`);
-  }
-
-  const clauseWhere = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+  const pagination = lirePagination(query);
+  const limiteSql = pagination.actif
+    ? `LIMIT $${filtres.parametres.length + 1} OFFSET $${filtres.parametres.length + 2}`
+    : '';
+  const params = pagination.actif
+    ? [...filtres.parametres, pagination.limit, pagination.offset]
+    : filtres.parametres;
 
   const sql = `
     ${SELECT_EVENEMENT}
-    ${clauseWhere}
+    ${filtres.clause()}
     GROUP BY e.id, a.nom_association, u.nom
     ORDER BY e.date_evenement ASC
+    ${limiteSql}
   `;
 
   const { rows } = await pool.query(sql, params);
@@ -154,6 +144,7 @@ exports.findEventById = async (id, citoyenId = null) => {
     LEFT JOIN inscriptions_evenements i ON i.evenement_id = e.id AND i.statut != 'annule'
     ${joinCitoyen}
     WHERE e.id = $1
+    ${citoyenId ? '' : "AND e.statut = 'publie'"}
     GROUP BY e.id, a.nom_association, u.nom, u.email, u.telephone ${citoyenId ? ', mon_ins.statut, mon_ins.id, mon_ins.message_motivation' : ''}
   `;
 
@@ -235,19 +226,35 @@ exports.registerCitoyen = async (evenementId, citoyenId, messageMotivation) => {
 
 // Citoyen : Annuler sa propre inscription
 exports.cancelRegistration = async (evenementId, citoyenId) => {
-  const { rows } = await pool.query(
-    `UPDATE inscriptions_evenements
-     SET statut = 'annule'
-     WHERE evenement_id = $1 AND citoyen_id = $2 AND statut != 'annule'
-     RETURNING id, statut`,
-    [evenementId, citoyenId]
-  );
+  return avecTransaction(async (client) => {
+    const { rows: avant } = await client.query(
+      `SELECT id, statut FROM inscriptions_evenements
+       WHERE evenement_id = $1 AND citoyen_id = $2 AND statut != 'annule'`,
+      [evenementId, citoyenId]
+    );
+    if (!avant.length) {
+      throw echec(404, 'Aucune inscription active trouvée pour cet événement.');
+    }
 
-  if (rows.length === 0) {
-    throw echec(404, 'Aucune inscription active trouvée pour cet événement.');
-  }
+    const { rows } = await client.query(
+      `UPDATE inscriptions_evenements
+       SET statut = 'annule'
+       WHERE evenement_id = $1 AND citoyen_id = $2 AND statut != 'annule'
+       RETURNING id, statut`,
+      [evenementId, citoyenId]
+    );
 
-  return { message: 'Inscription annulée avec succès.' };
+    // US24 / Q4 : une inscription acceptee annulee perd ses points.
+    if (avant[0].statut === 'accepte') {
+      await engagementService.revoquerPourSource(
+        client,
+        'inscriptions_evenements',
+        avant[0].id
+      );
+    }
+
+    return { message: 'Inscription annulée avec succès.' };
+  });
 };
 
 // US18 : Consultation de la liste des participants inscrits (association)
@@ -305,7 +312,7 @@ exports.updateParticipantStatus = async (evenementId, inscriptionId, nouveauStat
 
   // Vérifier que l'événement appartient à l'association
   const { rows: eventRows } = await pool.query(
-    `SELECT id, association_id, places_disponibles FROM evenements WHERE id = $1`,
+    `SELECT id, titre, association_id, places_disponibles FROM evenements WHERE id = $1`,
     [evenementId]
   );
   if (eventRows.length === 0) {
@@ -328,19 +335,45 @@ exports.updateParticipantStatus = async (evenementId, inscriptionId, nouveauStat
     }
   }
 
-  const { rows } = await pool.query(
-    `UPDATE inscriptions_evenements
-     SET statut = $1
-     WHERE id = $2 AND evenement_id = $3
-     RETURNING id, evenement_id, citoyen_id, statut`,
-    [nouveauStatut, inscriptionId, evenementId]
-  );
+  const inscription = await avecTransaction(async (client) => {
+    const { rows } = await client.query(
+      `UPDATE inscriptions_evenements
+       SET statut = $1
+       WHERE id = $2 AND evenement_id = $3
+       RETURNING id, evenement_id, citoyen_id, statut`,
+      [nouveauStatut, inscriptionId, evenementId]
+    );
 
-  if (rows.length === 0) {
-    throw echec(404, 'Candidature / Inscription introuvable pour cet événement.');
-  }
+    if (rows.length === 0) {
+      throw echec(404, 'Candidature / Inscription introuvable pour cet événement.');
+    }
 
-  return rows[0];
+    // US37 / US24 : seule l'acceptation compte comme engagement (decision Q1).
+    if (nouveauStatut === 'accepte') {
+      await activitesService.enregistrerActivite(client, {
+        utilisateurId: rows[0].citoyen_id,
+        type: activitesService.TYPES.INSCRIPTION_EVENEMENT_ACCEPTEE,
+        refTable: 'inscriptions_evenements',
+        refId: rows[0].id,
+        libelle: `Inscription acceptée à l'événement « ${eventRows[0].titre} »`,
+        metadata: { evenement_id: evenementId },
+      });
+    }
+
+    // US24 / Q4 : un refus (apres acceptation) retire les points et le badge
+    // associes a cette inscription, dans la meme transaction.
+    if (nouveauStatut === 'refuse') {
+      await engagementService.revoquerPourSource(
+        client,
+        'inscriptions_evenements',
+        rows[0].id
+      );
+    }
+
+    return rows[0];
+  });
+
+  return inscription;
 };
 
 // Association : Annuler ou modifier le statut d'un événement

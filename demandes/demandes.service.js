@@ -1,5 +1,7 @@
 const pool = require("../config/db");
 const { echec } = require("../utils/http");
+const activitesService = require("../activites/activites.service");
+const { avecTransaction } = require("../utils/db");
 
 exports.creerDemande = async (data, citoyenId) => {
   const categorie = String(data.categorie || "").trim();
@@ -15,13 +17,26 @@ exports.creerDemande = async (data, citoyenId) => {
     throw echec(400, "La description doit contenir au moins 10 caractères.");
   }
 
-  const result = await pool.query(
-    `INSERT INTO demande_aide (citoyen_id, categorie, description, ville, telephone, association_id)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, categorie, ville, statut, created_at`,
-    [citoyenId, categorie, description, ville, telephone, associationId]
-  );
-  return result.rows[0];
+  return avecTransaction(async (client) => {
+    const result = await client.query(
+      `INSERT INTO demande_aide (citoyen_id, categorie, description, ville, telephone, association_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, categorie, ville, statut, created_at`,
+      [citoyenId, categorie, description, ville, telephone, associationId]
+    );
+
+    // Tracee dans le journal (0 point : demander de l'aide n'est pas un don).
+    await activitesService.enregistrerActivite(client, {
+      utilisateurId: citoyenId,
+      type: activitesService.TYPES.DEMANDE_AIDE,
+      refTable: 'demande_aide',
+      refId: result.rows[0].id,
+      libelle: `Demande d'aide envoyée (${categorie}, ${ville})`,
+      metadata: { categorie, ville },
+    });
+
+    return result.rows[0];
+  });
 };
 
 // L'association voit ses demandes + celles qui ne sont pas encore affectees

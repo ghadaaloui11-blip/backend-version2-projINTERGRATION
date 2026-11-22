@@ -373,6 +373,8 @@ const supprimerSignalement = (id) => pool.query("DELETE FROM signalement WHERE i
 // Creation via le vrai endpoint (multipart) : garantit le journal "recu".
 const creerSignalementViaApi = async (token, description) => {
   const form = new FormData();
+  // US07 : le titre est obligatoire (5 caracteres minimum).
+  form.append("titre", "Signalement de test");
   form.append("description", description);
   const reponse = await fetch(`${baseUrl}/api/reports`, {
     method: "POST",
@@ -754,6 +756,7 @@ test("signalement : coordonnees invalides refusees, valides acceptees", async ()
     ];
     for (const [latitude, longitude] of casInvalides) {
       const form = new FormData();
+      form.append("titre", "Coordonnees invalides");
       form.append("description", "Coordonnees invalides");
       form.append("latitude", latitude);
       form.append("longitude", longitude);
@@ -768,6 +771,7 @@ test("signalement : coordonnees invalides refusees, valides acceptees", async ()
     }
 
     const form = new FormData();
+    form.append("titre", "Coordonnees valides");
     form.append("description", "Coordonnees valides");
     form.append("latitude", "36.8065");
     form.append("longitude", "10.1815");
@@ -940,5 +944,461 @@ test("upload : contenu non conforme a l'extension -> 400 et fichier supprime", a
     assert.match(json.erreur, /Contenu de fichier invalide/);
   } finally {
     await supprimerUtilisateur(citoyen.id);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// US38 : filtres combines sur les quatre listes publiques.
+// ---------------------------------------------------------------------------
+
+test("US38 campagnes : filtres combines returns tableau + X-Total-Count", async () => {
+  const { status, json, headers } = await api(
+    "GET",
+    "/api/campagnes?statut=all&ville=Tunis&categorie=Social&search=aide&page=1&limit=5"
+  );
+  assert.equal(status, 200);
+  assert.ok(Array.isArray(json));
+  assert.ok(headers.get("X-Total-Count") !== null);
+});
+
+test("US38 campagnes : categorie inconnue en lecture -> 200 et liste vide", async () => {
+  const { status, json } = await api("GET", "/api/campagnes?statut=all&categorie=Inexistante");
+  assert.equal(status, 200);
+  assert.deepEqual(json, []);
+});
+
+test("US38 campagnes : date invalide -> 400", async () => {
+  const { status } = await api("GET", "/api/campagnes?date_debut=2026-99-99");
+  assert.equal(status, 400);
+});
+
+test("US38 associations publiques : filtres ville/categorie/recherche", async () => {
+  const { status, json } = await api(
+    "GET",
+    "/api/associations/liste?ville=Tunis&categorie=Social&search=espoir"
+  );
+  assert.equal(status, 200);
+  assert.ok(Array.isArray(json));
+  assert.ok(json.every((a) => !("telephone" in a)), "aucun telephone ne doit fuir");
+});
+
+test("US38 signalements publics : filtres combines + pagination", async () => {
+  const { status, json, headers } = await api(
+    "GET",
+    "/api/signalement/public?categorie=Environnement&ville=Tunis&date_debut=2020-01-01&page=1&limit=10"
+  );
+  assert.equal(status, 200);
+  assert.ok(Array.isArray(json));
+  assert.ok(headers.get("X-Total-Count") !== null);
+});
+
+test("US38 signalements publics : categorie inconnue -> 200 et liste vide", async () => {
+  const { status, json } = await api("GET", "/api/signalement/public?categorie=Inexistante");
+  assert.equal(status, 200);
+  assert.deepEqual(json, []);
+});
+
+test("US38 signalements publics : statut invalide reste refuse (400)", async () => {
+  const { status } = await api("GET", "/api/signalement/public?statut=nimportequoi");
+  assert.equal(status, 400);
+});
+
+// ---------------------------------------------------------------------------
+// US37 : journal d'activite prive.
+// ---------------------------------------------------------------------------
+
+test("US37 : /api/activites/mes exige une session (401)", async () => {
+  const { status } = await api("GET", "/api/activites/mes");
+  assert.equal(status, 401);
+});
+
+test("US37 : /api/activites/mes renvoie un tableau pagine pour le JWT", async () => {
+  const citoyen = await inscrireCitoyenTemporaire();
+  try {
+    const { status, json, headers } = await api("GET", "/api/activites/mes?page=1&limit=5", {
+      token: citoyen.token,
+    });
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(json));
+    assert.ok(headers.get("X-Total-Count") !== null);
+  } finally {
+    await supprimerUtilisateur(citoyen.id);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// US24 : points d'engagement et badges (regles serveur, ecritures
+// transactionnelles, idempotence, plafond journalier et revocation).
+// ---------------------------------------------------------------------------
+
+test("US24 : /api/engagement/moi exige une session (401)", async () => {
+  const { status } = await api("GET", "/api/engagement/moi");
+  assert.equal(status, 401);
+});
+
+test("US24 : /api/engagement/moi renvoie solde/actions/badges pour le JWT", async () => {
+  const citoyen = await inscrireCitoyenTemporaire();
+  try {
+    const { status, json } = await api("GET", "/api/engagement/moi", {
+      token: citoyen.token,
+    });
+    assert.equal(status, 200);
+    assert.equal(json.solde, 0);
+    assert.equal(json.actions, 0);
+    assert.ok(Array.isArray(json.badges));
+    assert.ok(Array.isArray(json.badges_restants));
+    assert.ok(json.badges_restants.length >= 6, "le catalog de 6 badges doit etre present");
+  } finally {
+    await supprimerUtilisateur(citoyen.id);
+  }
+});
+
+test("US24 : un don donne 10 points, un seul point par activite, et ignore les points du client", async () => {
+  const asso = await inscrireAssociationTemporaire({ approuvee: true });
+  const citoyen = await inscrireCitoyenTemporaire();
+  try {
+    const campagne = await api("POST", "/api/campagnes", {
+      token: asso.token,
+      body: campagneValide(),
+    });
+    assert.equal(campagne.status, 201, campagne.texte);
+    const campagneId = campagne.json.campagne.id;
+
+    const don = await api("POST", `/api/campagnes/${campagneId}/don`, {
+      token: citoyen.token,
+      body: { montant: 25, est_anonyme: false, points: 9999 },
+    });
+    assert.equal(don.status, 201, don.texte);
+
+    const { rows: activites } = await pool.query(
+      "SELECT id FROM activite WHERE utilisateur_id = $1 AND type = 'don'",
+      [citoyen.id]
+    );
+    assert.equal(activites.length, 1, "une seule activite de don");
+
+    const { rows: points } = await pool.query(
+      "SELECT points FROM point_engagement WHERE activite_id = $1",
+      [activites[0].id]
+    );
+    assert.equal(points.length, 1, "une seule ligne de point par activite");
+    assert.equal(points[0].points, 10, "les points du client (9999) doivent etre ignores");
+
+    const { json } = await api("GET", "/api/engagement/moi", { token: citoyen.token });
+    assert.equal(json.solde, 10);
+    assert.equal(json.actions, 1);
+    assert.ok(json.badges.some((b) => b.code === "premier_pas"), "premier badge debloque");
+  } finally {
+    await supprimerUtilisateur(citoyen.id);
+    await supprimerUtilisateur(asso.id);
+  }
+});
+
+test("US24 : idempotence — reenregistrer la meme source ne cree pas de second point", async () => {
+  const engagementService = require("../engagement/engagement.service");
+  const citoyen = await inscrireCitoyenTemporaire();
+  try {
+    const refId = 900000 + Math.floor(Math.random() * 100000);
+    const sql = `INSERT INTO activite (utilisateur_id, type, ref_table, ref_id, libelle)
+                 VALUES ($1, 'don_nature_collecte', 'dons_nature_test', $2, 'Don nature test')
+                 ON CONFLICT (type, ref_table, ref_id) DO NOTHING
+                 RETURNING id, utilisateur_id, type`;
+    const premier = await pool.query(sql, [citoyen.id, refId]);
+    assert.equal(premier.rows.length, 1);
+    await engagementService.attribuerPoints(null, premier.rows[0]);
+
+    // Meme source -> l'activite est ignoree (UNIQUE), aucun second point.
+    const second = await pool.query(sql, [citoyen.id, refId]);
+    assert.equal(second.rows.length, 0);
+    if (second.rows[0]) await engagementService.attribuerPoints(null, second.rows[0]);
+
+    const { rows } = await pool.query(
+      "SELECT points FROM point_engagement WHERE utilisateur_id = $1",
+      [citoyen.id]
+    );
+    assert.equal(rows.length, 1, "un seul point malgre le double enregistrement");
+    assert.equal(rows[0].points, 15);
+  } finally {
+    await supprimerUtilisateur(citoyen.id);
+  }
+});
+
+test("US24 : plafond quotidien — un seul signalement pointe par jour", async () => {
+  const engagementService = require("../engagement/engagement.service");
+  const citoyen = await inscrireCitoyenTemporaire();
+  try {
+    // ref_id est un INTEGER : rester sous 2^31 (Date.now() est en millisecondes).
+    const base = 1_000_000_000 + Math.floor(Math.random() * 100_000_000);
+    const creer = async (offset) => {
+      const { rows } = await pool.query(
+        `INSERT INTO activite (utilisateur_id, type, ref_table, ref_id, libelle)
+         VALUES ($1, 'signalement', 'signalement_test', $2, 'Signalement test')
+         RETURNING id, utilisateur_id, type`,
+        [citoyen.id, base + offset]
+      );
+      await engagementService.attribuerPoints(null, rows[0]);
+    };
+    await creer(0);
+    await creer(1);
+
+    const { rows } = await pool.query(
+      "SELECT points FROM point_engagement WHERE utilisateur_id = $1 ORDER BY id",
+      [citoyen.id]
+    );
+    assert.equal(rows.length, 2, "une ligne de point par activite");
+    assert.equal(rows[0].points, 5, "premier signalement : 5 points");
+    assert.equal(rows[1].points, 0, "deuxieme signalement le meme jour : plafond atteint");
+
+    const { json } = await api("GET", "/api/engagement/moi", { token: citoyen.token });
+    assert.equal(json.solde, 5);
+  } finally {
+    await supprimerUtilisateur(citoyen.id);
+  }
+});
+
+test("US24 : revoquerPourSource retire points, activite et badge non merite", async () => {
+  const engagementService = require("../engagement/engagement.service");
+  const citoyen = await inscrireCitoyenTemporaire();
+  try {
+    const refId = 800000 + Math.floor(Math.random() * 100000);
+    const { rows } = await pool.query(
+      `INSERT INTO activite (utilisateur_id, type, ref_table, ref_id, libelle)
+       VALUES ($1, 'inscription_evenement_acceptee', 'inscriptions_evenements', $2, 'Inscription test')
+       RETURNING id, utilisateur_id, type`,
+      [citoyen.id, refId]
+    );
+    await engagementService.attribuerPoints(null, rows[0]);
+
+    let { json } = await api("GET", "/api/engagement/moi", { token: citoyen.token });
+    assert.equal(json.solde, 20);
+    assert.ok(json.badges.some((b) => b.code === "premier_pas"));
+
+    // L'inscription est refusee -> revoquer points + activite + badges.
+    await engagementService.revoquerPourSource(null, "inscriptions_evenements", refId);
+
+    json = (await api("GET", "/api/engagement/moi", { token: citoyen.token })).json;
+    assert.equal(json.solde, 0);
+    assert.equal(json.actions, 0);
+    assert.ok(!json.badges.some((b) => b.code === "premier_pas"), "le badge doit etre retire");
+
+    const { rows: acts } = await pool.query(
+      "SELECT id FROM activite WHERE ref_table = 'inscriptions_evenements' AND ref_id = $1",
+      [refId]
+    );
+    assert.equal(acts.length, 0, "l'activite doit etre supprimee");
+  } finally {
+    await supprimerUtilisateur(citoyen.id);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// US26 : defis — catalog, autorisations, idempotence, completion auto/manuelle.
+// ---------------------------------------------------------------------------
+
+const tokenAdmin = () => jwt.sign({ id: 999999, role: "admin" }, process.env.JWT_SECRET);
+
+const creerDefi = async (data, token = tokenAdmin()) => {
+  const r = await api("POST", "/api/defis", { token, body: data });
+  assert.equal(r.status, 201, r.texte);
+  return r.json;
+};
+
+test("US26 : le catalog des defis est public (200, tableau)", async () => {
+  const { status, json } = await api("GET", "/api/defis");
+  assert.equal(status, 200);
+  assert.ok(Array.isArray(json));
+});
+
+test("US26 : creation reservee aux admins (citoyen 403, admin 201)", async () => {
+  const citoyen = await inscrireCitoyenTemporaire();
+  let defiId;
+  try {
+    const refuse = await api("POST", "/api/defis", {
+      token: citoyen.token,
+      body: { titre: "Defi interdit", mode: "automatique", type_activite: "don", objectif: 1 },
+    });
+    assert.equal(refuse.status, 403);
+
+    const ok = await api("POST", "/api/defis", {
+      token: tokenAdmin(),
+      body: { titre: "Defi admin", mode: "automatique", type_activite: "don", objectif: 1, recompense_points: 5 },
+    });
+    assert.equal(ok.status, 201, ok.texte);
+    defiId = ok.json.id;
+  } finally {
+    if (defiId) await pool.query("DELETE FROM defi WHERE id = $1", [defiId]);
+    await supprimerUtilisateur(citoyen.id);
+  }
+});
+
+test("US26 : rejoindre un defi est idempotent (une seule participation)", async () => {
+  const defi = await creerDefi({
+    titre: "Defi idempotence", mode: "manuelle", objectif: 1, recompense_points: 5,
+  });
+  const citoyen = await inscrireCitoyenTemporaire();
+  try {
+    const r1 = await api("POST", `/api/defis/${defi.id}/rejoindre`, { token: citoyen.token, body: {} });
+    assert.equal(r1.status, 201, r1.texte);
+    const r2 = await api("POST", `/api/defis/${defi.id}/rejoindre`, { token: citoyen.token, body: {} });
+    assert.equal(r2.status, 201, r2.texte);
+    assert.equal(r1.json.id, r2.json.id, "la meme participation doit etre renvoyee");
+
+    const { rows } = await pool.query(
+      "SELECT id FROM defi_participation WHERE defi_id = $1 AND utilisateur_id = $2",
+      [defi.id, citoyen.id]
+    );
+    assert.equal(rows.length, 1, "une seule ligne de participation");
+  } finally {
+    await pool.query("DELETE FROM defi WHERE id = $1", [defi.id]);
+    await supprimerUtilisateur(citoyen.id);
+  }
+});
+
+test("US26 : un defi automatique se complete et attribue sa recompense", async () => {
+  const activitesService = require("../activites/activites.service");
+  const defi = await creerDefi({
+    titre: "Defi auto don", mode: "automatique", type_activite: "don",
+    objectif: 1, recompense_points: 50,
+  });
+  const citoyen = await inscrireCitoyenTemporaire();
+  try {
+    const j = await api("POST", `/api/defis/${defi.id}/rejoindre`, { token: citoyen.token, body: {} });
+    assert.equal(j.status, 201, j.texte);
+    assert.equal(j.json.statut, "en_cours");
+
+    // Une activite 'don' declenche la progression (hook transactionnel).
+    const refId = 700000 + Math.floor(Math.random() * 100000);
+    await activitesService.enregistrerActivite(null, {
+      utilisateurId: citoyen.id,
+      type: "don",
+      refTable: "dons_test",
+      refId,
+      libelle: "Don test",
+    });
+
+    const { json: mes } = await api("GET", "/api/defis/mes", { token: citoyen.token });
+    const participation = mes.find((p) => p.defi_id === defi.id);
+    assert.ok(participation, "la participation doit etre presente");
+    assert.equal(participation.statut, "complete", "le defi doit etre complete");
+    assert.equal(participation.progression, 1);
+
+    const { json: eng } = await api("GET", "/api/engagement/moi", { token: citoyen.token });
+    assert.equal(eng.solde, 60, "10 points du don + 50 points de recompense");
+  } finally {
+    await pool.query("DELETE FROM defi WHERE id = $1", [defi.id]);
+    await supprimerUtilisateur(citoyen.id);
+  }
+});
+
+test("US26 : preuve photo obligatoire puis validation admin (mode manuel)", async () => {
+  const defisService = require("../defis/defis.service");
+  const defi = await creerDefi({
+    titre: "Defi manuel photo", mode: "manuelle", objectif: 1, recompense_points: 30,
+  });
+  const citoyen = await inscrireCitoyenTemporaire();
+  try {
+    const j = await api("POST", `/api/defis/${defi.id}/rejoindre`, { token: citoyen.token, body: {} });
+    assert.equal(j.status, 201, j.texte);
+
+    // Sans fichier joint -> 400 (aucune photo de preuve).
+    const sansPhoto = await api("POST", `/api/defis/${defi.id}/preuve`, {
+      token: citoyen.token, body: { commentaire: "sans photo" },
+    });
+    assert.equal(sansPhoto.status, 400);
+
+    // Soumission via le service (multer n'est pas exerce par le helper JSON).
+    const participation = await defisService.soumettrePreuve(
+      defi.id, citoyen.id, { filename: "preuve.jpg" }, "Ma preuve"
+    );
+    assert.equal(participation.statut, "en_attente");
+
+    // Un citoyen ne peut pas valider une preuve (admin seulement).
+    const refuseValidation = await api(
+      "PATCH", `/api/defis/participations/${participation.id}/validation`,
+      { token: citoyen.token, body: { accepte: true } }
+    );
+    assert.equal(refuseValidation.status, 403);
+
+    const validee = await api(
+      "PATCH", `/api/defis/participations/${participation.id}/validation`,
+      { token: tokenAdmin(), body: { accepte: true } }
+    );
+    assert.equal(validee.status, 200, validee.texte);
+    assert.equal(validee.json.statut, "complete");
+
+    const { json: eng } = await api("GET", "/api/engagement/moi", { token: citoyen.token });
+    assert.equal(eng.solde, 30, "recompense du defi manuel");
+  } finally {
+    await pool.query("DELETE FROM defi WHERE id = $1", [defi.id]);
+    await supprimerUtilisateur(citoyen.id);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// US19 : partage d'evenements (page OG/Twitter, 404 hors ligne, visibilite).
+// ---------------------------------------------------------------------------
+
+const creerEvenement = async (token, overrides = {}) => {
+  const r = await api("POST", "/api/evenements", {
+    token,
+    body: {
+      titre: "Evenement partage test",
+      description: "Evenement de test pour le partage",
+      date_evenement: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
+      lieu: "Tunis",
+      ville: "Tunis",
+      places_disponibles: 10,
+      ...overrides,
+    },
+  });
+  assert.equal(r.status, 201, r.texte);
+  return r.json;
+};
+
+test("US19 : page de partage d'un evenement publie -> 200 avec balises OG/Twitter", async () => {
+  const asso = await inscrireAssociationTemporaire({ approuvee: true });
+  let eventId;
+  try {
+    const evenement = await creerEvenement(asso.token);
+    eventId = evenement.id;
+
+    const { status, texte, headers } = await api("GET", `/evenements/${eventId}/partage`);
+    assert.equal(status, 200);
+    assert.match(headers.get("content-type") || "", /text\/html/);
+    assert.match(texte, /og:title/);
+    assert.match(texte, /og:image/);
+    assert.match(texte, /og:url/);
+    assert.match(texte, /twitter:card/);
+    assert.match(texte, /Evenement partage test/);
+  } finally {
+    if (eventId) await pool.query("DELETE FROM evenements WHERE id = $1", [eventId]);
+    await supprimerUtilisateur(asso.id);
+  }
+});
+
+test("US19 : page de partage -> 404 pour un evenement inexistant", async () => {
+  const { status } = await api("GET", "/evenements/999999999/partage");
+  assert.equal(status, 404);
+});
+
+test("US19 : un evenement annule n'est ni partageable ni visible par un anonyme", async () => {
+  const asso = await inscrireAssociationTemporaire({ approuvee: true });
+  let eventId;
+  try {
+    const evenement = await creerEvenement(asso.token);
+    eventId = evenement.id;
+
+    const changement = await api("PATCH", `/api/evenements/${eventId}/statut`, {
+      token: asso.token, body: { statut: "annule" },
+    });
+    assert.equal(changement.status, 200, changement.texte);
+
+    const partage = await api("GET", `/evenements/${eventId}/partage`);
+    assert.equal(partage.status, 404, "un evenement annule n'a pas de page de partage");
+
+    const detail = await api("GET", `/api/evenements/${eventId}`);
+    assert.equal(detail.status, 404, "un visiteur anonyme ne voit pas un evenement annule");
+  } finally {
+    if (eventId) await pool.query("DELETE FROM evenements WHERE id = $1", [eventId]);
+    await supprimerUtilisateur(asso.id);
   }
 });

@@ -2,6 +2,7 @@ const service = require('./associations.service');
 const path = require('path');
 const fs = require('fs');
 const { repondreErreur } = require('../utils/http');
+const { repondreListe } = require('../utils/filtres');
 
 const DOSSIER_DOCUMENTS = path.resolve(path.join(__dirname, '..', 'uploads'));
 
@@ -134,11 +135,13 @@ exports.validerAssociation = async (req, res) => {
     repondreErreur(res, err, "Erreur lors de la validation de l'association.");
   }
 };
-// GET /api/associations/liste  — liste publique des associations approuvees
+// GET /api/associations/liste — liste publique filtrable des associations approuvees
 exports.listerAssociationsPubliques = async (req, res) => {
   try {
-    const associations = await service.listerAssociationsPubliques(req.query.recherche);
-    res.json(associations);
+    const associations = await service.listerAssociationsPubliques(req.query);
+    const pagine = req.query.page !== undefined || req.query.limit !== undefined;
+    const total = pagine ? await service.compterAssociationsPubliques(req.query) : undefined;
+    repondreListe(res, associations, total);
   } catch (err) {
     repondreErreur(res, err, 'Erreur lors du chargement des associations.');
   }
