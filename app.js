@@ -125,6 +125,14 @@ const publicDir = path.join(__dirname, "public");
 app.use(express.static(publicDir));
 // US22 : tableau de bord administrateur
 app.use("/api/admin", require("./admin/admin.routes"));
+// US20 : recherche globale
+app.use("/api/search", require("./search/search.routes"));
+// US23 : moderation admin
+app.use("/api/admin/moderation", require("./moderation/moderation.routes"));
+// US15 : dons récurrents
+app.use("/api/dons-recurrents", require("./dons-recurrents/dons-recurrents.routes"));
+// US25 : fil d'actualités
+app.use("/api/fil-actualites", require("./fil-actualites/fil-actualites.routes"));
 
 app.use((req, res) => {
   res.status(404).json({ erreur: "Route introuvable." });
