@@ -129,6 +129,10 @@ app.use("/api/admin", require("./admin/admin.routes"));
 app.use("/api/search", require("./search/search.routes"));
 // US23 : moderation admin
 app.use("/api/admin/moderation", require("./moderation/moderation.routes"));
+// US30 : signalement de contenu abusif (utilisateur)
+app.use("/api/signalements-abuse", require("./signalements-abuse/signalements-abuse.routes"));
+// US31 / US32 : instruction et suppression des contenus abusifs (admin)
+app.use("/api/admin/signalements-abuse", require("./signalements-abuse/admin-abuse.routes"));
 // US15 : dons récurrents
 app.use("/api/dons-recurrents", require("./dons-recurrents/dons-recurrents.routes"));
 // US25 : fil d'actualités

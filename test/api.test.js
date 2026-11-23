@@ -1402,3 +1402,204 @@ test("US19 : un evenement annule n'est ni partageable ni visible par un anonyme"
     await supprimerUtilisateur(asso.id);
   }
 });
+
+// ---------------------------------------------------------------------------
+// US30 / US31 / US32 : signalement et moderation d'un CONTENU abusif.
+// ---------------------------------------------------------------------------
+
+test("US30 : signaler un contenu abusif -> 201, doublon 409, liste admin reservee", async () => {
+  const asso = await inscrireAssociationTemporaire({ approuvee: true });
+  const citoyen = await inscrireCitoyenTemporaire();
+  let evenementId;
+
+  try {
+    const evenement = await creerEvenement(asso.token);
+    evenementId = evenement.id;
+
+    const signalement = await api("POST", "/api/signalements-abuse", {
+      token: citoyen.token,
+      body: {
+        type_cible: "evenement",
+        cible_id: evenementId,
+        motif: "spam",
+        description: "Evenement publicitaire",
+      },
+    });
+    assert.equal(signalement.status, 201, signalement.texte);
+    assert.equal(signalement.json.signalement.type_cible, "evenement");
+    assert.equal(signalement.json.signalement.cible_id, evenementId);
+    assert.equal(signalement.json.signalement.statut, "recu");
+    assert.equal(signalement.json.signalement.titre_cible, "Evenement partage test");
+
+    const doublon = await api("POST", "/api/signalements-abuse", {
+      token: citoyen.token,
+      body: { type_cible: "evenement", cible_id: evenementId, motif: "spam" },
+    });
+    assert.equal(doublon.status, 409, "un doublon ouvert doit etre refuse");
+
+    const mesSignalements = await api("GET", "/api/signalements-abuse/mes", {
+      token: citoyen.token,
+    });
+    assert.equal(mesSignalements.status, 200);
+    assert.equal(mesSignalements.json.total, 1);
+
+    const interdit = await api("GET", "/api/admin/signalements-abuse", {
+      token: citoyen.token,
+    });
+    assert.equal(interdit.status, 403, "la file admin n'est pas publique");
+  } finally {
+    if (evenementId) await pool.query("DELETE FROM evenements WHERE id = $1", [evenementId]);
+    await supprimerUtilisateur(citoyen.id);
+    await supprimerUtilisateur(asso.id);
+  }
+});
+
+test("US30 : motif invalide -> 400 et cible inexistante -> 404", async () => {
+  const citoyen = await inscrireCitoyenTemporaire();
+  try {
+    const mauvaisMotif = await api("POST", "/api/signalements-abuse", {
+      token: citoyen.token,
+      body: { type_cible: "campagne", cible_id: 1, motif: "inconnu" },
+    });
+    assert.equal(mauvaisMotif.status, 400);
+
+    const cibleAbsente = await api("POST", "/api/signalements-abuse", {
+      token: citoyen.token,
+      body: { type_cible: "campagne", cible_id: 999999999, motif: "fraude" },
+    });
+    assert.equal(cibleAbsente.status, 404);
+  } finally {
+    await supprimerUtilisateur(citoyen.id);
+  }
+});
+
+test("US31/US32 : l'admin instruit le signalement puis supprime le contenu abusif", async () => {
+  const asso = await inscrireAssociationTemporaire({ approuvee: true });
+  const citoyen = await inscrireCitoyenTemporaire();
+  let evenementId;
+  let abuseId;
+
+  try {
+    const evenement = await creerEvenement(asso.token);
+    evenementId = evenement.id;
+
+    const cree = await api("POST", "/api/signalements-abuse", {
+      token: citoyen.token,
+      body: { type_cible: "evenement", cible_id: evenementId, motif: "fraude" },
+    });
+    assert.equal(cree.status, 201, cree.texte);
+    abuseId = cree.json.signalement.id;
+
+    const file = await api("GET", "/api/admin/signalements-abuse?statut=recu", {
+      token: tokenAdmin(),
+    });
+    assert.equal(file.status, 200, file.texte);
+    assert.ok(
+      file.json.signalements.some((s) => s.id === abuseId),
+      "le signalement doit apparaitre dans la file admin"
+    );
+
+    const detail = await api("GET", `/api/admin/signalements-abuse/${abuseId}`, {
+      token: tokenAdmin(),
+    });
+    assert.equal(detail.status, 200);
+    assert.equal(detail.json.signalant_email, citoyen.email);
+
+    const enCours = await api("PATCH", `/api/admin/signalements-abuse/${abuseId}/statut`, {
+      token: tokenAdmin(),
+      body: { statut: "en_cours", decision: "Vérification en cours" },
+    });
+    assert.equal(enCours.status, 200, enCours.texte);
+    assert.equal(enCours.json.signalement.statut, "en_cours");
+
+    const suppression = await api("DELETE", `/api/admin/signalements-abuse/${abuseId}/contenu`, {
+      token: tokenAdmin(),
+    });
+    assert.equal(suppression.status, 200, suppression.texte);
+    assert.equal(suppression.json.signalement.statut, "resolu");
+    assert.equal(suppression.json.signalement.contenu_supprime, true);
+
+    const contenuRestant = await pool.query("SELECT id FROM evenements WHERE id = $1", [
+      evenementId,
+    ]);
+    assert.equal(contenuRestant.rows.length, 0, "le contenu abusif doit etre supprime");
+    evenementId = undefined;
+
+    const apres = await api("GET", `/api/admin/signalements-abuse/${abuseId}`, {
+      token: tokenAdmin(),
+    });
+    assert.equal(apres.json.statut, "resolu");
+    assert.match(apres.json.decision, /supprimé/);
+  } finally {
+    if (evenementId) await pool.query("DELETE FROM evenements WHERE id = $1", [evenementId]);
+    if (abuseId) await pool.query("DELETE FROM signalement_abuse WHERE id = $1", [abuseId]);
+    await supprimerUtilisateur(citoyen.id);
+    await supprimerUtilisateur(asso.id);
+  }
+});
+
+test("US30/US31/US32 : un signalement rejete peut etre rouvert, puis la campagne supprimee", async () => {
+  const asso = await inscrireAssociationTemporaire({ approuvee: true });
+  const citoyen = await inscrireCitoyenTemporaire();
+  let campagneId;
+  const abuseIds = [];
+
+  try {
+    const campagne = await api("POST", "/api/campagnes", {
+      token: asso.token,
+      body: campagneValide(),
+    });
+    assert.equal(campagne.status, 201, campagne.texte);
+    campagneId = campagne.json.campagne.id;
+
+    const premier = await api("POST", "/api/signalements-abuse", {
+      token: citoyen.token,
+      body: { type_cible: "campagne", cible_id: campagneId, motif: "fraude" },
+    });
+    assert.equal(premier.status, 201, premier.texte);
+    abuseIds.push(premier.json.signalement.id);
+
+    const rejet = await api("PATCH", `/api/admin/signalements-abuse/${abuseIds[0]}/statut`, {
+      token: tokenAdmin(),
+      body: { statut: "rejete", decision: "Campagne conforme" },
+    });
+    assert.equal(rejet.status, 200, rejet.texte);
+
+    const second = await api("POST", "/api/signalements-abuse", {
+      token: citoyen.token,
+      body: {
+        type_cible: "campagne",
+        cible_id: campagneId,
+        motif: "contenu_inapproprie",
+        description: "Nouveaux elements",
+      },
+    });
+    assert.equal(second.status, 201, "un dossier close doit pouvoir etre signale a nouveau");
+    abuseIds.push(second.json.signalement.id);
+
+    const refusSuppression = await api(
+      "DELETE",
+      `/api/admin/signalements-abuse/${abuseIds[0]}/contenu`,
+      { token: tokenAdmin() }
+    );
+    assert.equal(refusSuppression.status, 400, "un signalement rejete ne peut pas supprimer le contenu");
+
+    const suppression = await api(
+      "DELETE",
+      `/api/admin/signalements-abuse/${abuseIds[1]}/contenu`,
+      { token: tokenAdmin() }
+    );
+    assert.equal(suppression.status, 200, suppression.texte);
+
+    const restant = await pool.query("SELECT id FROM campagnes WHERE id = $1", [campagneId]);
+    assert.equal(restant.rows.length, 0);
+    campagneId = undefined;
+  } finally {
+    if (campagneId) await pool.query("DELETE FROM campagnes WHERE id = $1", [campagneId]);
+    for (const id of abuseIds) {
+      await pool.query("DELETE FROM signalement_abuse WHERE id = $1", [id]);
+    }
+    await supprimerUtilisateur(citoyen.id);
+    await supprimerUtilisateur(asso.id);
+  }
+});
