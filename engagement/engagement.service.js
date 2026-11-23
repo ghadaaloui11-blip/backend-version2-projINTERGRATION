@@ -111,20 +111,16 @@ exports.revoquerPourSource = async (client, refTable, refId) => {
   for (const utilisateur of rows) {
     const stats = await calculerStats(executeur, utilisateur.utilisateur_id);
     const eligibles = badgesEligibles(stats);
-    const { rows: obtenus } = await executeur.query(
-      `SELECT b.code FROM badge_obtenu bo JOIN badge b ON b.id = bo.badge_id
-       WHERE bo.utilisateur_id = $1`,
-      [utilisateur.utilisateur_id]
+    // Suppression en lot des badges non (plus) merites pour cet utilisateur,
+    // au lieu d'une requete par badge.
+    await executeur.query(
+      `DELETE FROM badge_obtenu bo
+       USING badge b
+       WHERE bo.badge_id = b.id
+         AND bo.utilisateur_id = $1
+         AND NOT (b.code = ANY($2::text[]))`,
+      [utilisateur.utilisateur_id, eligibles]
     );
-    for (const badge of obtenus) {
-      if (!eligibles.includes(badge.code)) {
-        await executeur.query(
-          `DELETE FROM badge_obtenu
-           WHERE utilisateur_id = $1 AND badge_id = (SELECT id FROM badge WHERE code = $2)`,
-          [utilisateur.utilisateur_id, badge.code]
-        );
-      }
-    }
   }
 };
 

@@ -64,6 +64,18 @@ npm run create-admin  # crée le compte admin de migrations/create-admin.js
 Comptes de démonstration créés manuellement pendant le développement :
 `admin@solidarite.tn` (admin), `asso@test.tn` (association), `sami@test.tn` (citoyen).
 
+## Base de données — démarrage
+
+Avant de lancer l'API pour la première fois (ou après un reset de la base) :
+
+```bash
+npm run migrate       # applique migrations/*.sql (idempotent)
+npm run create-admin  # crée le compte admin (si nécessaire)
+```
+
+L'API ne lance pas les migrations automatiquement au démarrage. Si des tables manquent,
+les endpoints concernés renverront des erreurs 500.
+
 ## Lancer
 
 ```bash
@@ -128,6 +140,14 @@ uploads-public/            # photos de signalement PUBLIQUES (non versionnées)
 | GET | `/api/associations`, `/:id/documents` | admin |
 | PATCH | `/api/associations/:id/validation` | admin |
 | GET | `/api/documents/:id/file` | propriétaire ou admin (token en en-tête **ou** `?token=`) |
+
+## Security notes
+
+- **Tokens:** JWTs are stored in the browser `localStorage` for simplicity. All user-generated content must be rendered
+  with Angular's default escaping or `textContent`; never `innerHTML`. The frontend `NotificationService` uses safe DOM APIs.
+- **Rate limiting:** `express-rate-limit` uses the default in-memory store, which is per-process. For multi-instance or
+  clustered deployments, configure a shared store (e.g. Redis) via the `store` option.
+- **Secrets:** `.env` is gitignored; never commit `JWT_SECRET` or database credentials.
 
 ## Notes
 
